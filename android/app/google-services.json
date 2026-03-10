@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "703248185300",
+    "project_id": "bubble-2ce01",
+    "storage_bucket": "bubble-2ce01.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:703248185300:android:d29bb4cd87afbbe16b0841",
+        "android_client_info": {
+          "package_name": "com.example.rant_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAGd3VHhq4er2uoNFKnRUBEnwGu9Ui2TV8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
