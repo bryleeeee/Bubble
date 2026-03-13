@@ -2,13 +2,17 @@ import 'dart:ui';
 import 'dart:async'; 
 import 'dart:convert'; 
 import 'dart:math' as math;
+import 'dart:typed_data'; 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart'; 
 import 'package:cloud_firestore/cloud_firestore.dart'; 
+import 'package:firebase_storage/firebase_storage.dart'; 
+import 'package:image_picker/image_picker.dart'; 
 import 'package:audioplayers/audioplayers.dart'; 
 import 'package:http/http.dart' as http; 
 import 'package:url_launcher/url_launcher.dart'; 
+import 'package:intl/intl.dart' hide TextDirection; 
 import 'login.dart'; 
 import 'spotify_service.dart'; 
 
@@ -127,51 +131,263 @@ class Post {
   int likes;
   int commentCount; 
   int repostCount;
-  final String? imageUrl;
+  final List<String> imageUrls;
   final MusicTrack? music;
 
   final bool isRepost;
   final String? repostedBy; 
+  final String? originalPostId; 
   final String? originalAuthor;
   final String? originalAvatarSeed;
   final int originalAvatarColorIndex;
   final String? originalText;
   final String? originalTimestamp;
-  final String? originalImageUrl;
+  final List<String> originalImageUrls;
 
   Post({
     required this.id, required this.author, required this.avatarSeed,
     this.avatarColorIndex = 0, required this.timestamp, required this.text,
     required this.mood, required this.likes, required this.commentCount,
-    this.repostCount = 0, this.imageUrl, this.music, 
-    this.isRepost = false, this.repostedBy, this.originalAuthor,
-    this.originalAvatarSeed, this.originalAvatarColorIndex = 0,
-    this.originalText, this.originalTimestamp, this.originalImageUrl,
+    this.repostCount = 0, this.imageUrls = const [], this.music, 
+    this.isRepost = false, this.repostedBy, this.originalPostId,
+    this.originalAuthor, this.originalAvatarSeed, this.originalAvatarColorIndex = 0,
+    this.originalText, this.originalTimestamp, this.originalImageUrls = const [],
   });
 
   factory Post.fromFirestore(DocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
+    
+    String formattedTime = 'Just now';
+    if (data['createdAt'] != null) {
+      DateTime dt = (data['createdAt'] as Timestamp).toDate();
+      formattedTime = DateFormat('MMM d, yyyy • h:mm a').format(dt);
+    }
+
+    List<String> parsedUrls = [];
+    if (data['imageUrls'] != null) {
+      parsedUrls = List<String>.from(data['imageUrls']);
+    } else if (data['imageUrl'] != null) {
+      parsedUrls = [data['imageUrl'] as String];
+    }
+
+    List<String> originalParsedUrls = [];
+    if (data['originalImageUrls'] != null) {
+      originalParsedUrls = List<String>.from(data['originalImageUrls']);
+    } else if (data['originalImageUrl'] != null) {
+      originalParsedUrls = [data['originalImageUrl'] as String];
+    }
+
     return Post(
       id: doc.id,
       author: data['author'] ?? 'Unknown',
       avatarSeed: data['avatarSeed'] ?? 'X',
       avatarColorIndex: data['avatarColorIndex'] ?? 0,
-      timestamp: data['displayTime'] ?? 'Just now',
+      timestamp: formattedTime, 
       text: data['text'] ?? '',
       mood: MoodTagX.fromString(data['mood'] ?? 'none'),
       likes: data['likes'] ?? 0,
       commentCount: data['commentCount'] ?? 0,
       repostCount: data['repostCount'] ?? 0,
-      imageUrl: data['imageUrl'],
+      imageUrls: parsedUrls, 
       music: data['music'] != null ? MusicTrack.fromMap(data['music']) : null,
       isRepost: data['isRepost'] ?? false,
       repostedBy: data['repostedBy'],
+      originalPostId: data['originalPostId'],
       originalAuthor: data['originalAuthor'],
       originalAvatarSeed: data['originalAvatarSeed'],
       originalAvatarColorIndex: data['originalAvatarColorIndex'] ?? 0,
       originalText: data['originalText'],
       originalTimestamp: data['originalTimestamp'],
-      originalImageUrl: data['originalImageUrl'],
+      originalImageUrls: originalParsedUrls, 
+    );
+  }
+}
+
+// ============================================================================
+// BUBBLE TAIL SHAPE
+// ============================================================================
+class BubbleTailShape extends OutlinedBorder {
+  final double borderRadius;
+  final double tailWidth;
+  final double tailHeight;
+
+  const BubbleTailShape({
+    BorderSide side = BorderSide.none,
+    this.borderRadius = 28.0,
+    this.tailWidth = 18.0,
+    this.tailHeight = 16.0,
+  }) : super(side: side);
+
+  @override
+  EdgeInsetsGeometry get dimensions => EdgeInsets.all(side.width);
+
+  @override
+  OutlinedBorder copyWith({BorderSide? side}) {
+    return BubbleTailShape(
+      side: side ?? this.side,
+      borderRadius: borderRadius,
+      tailWidth: tailWidth,
+      tailHeight: tailHeight,
+    );
+  }
+
+  @override
+  OutlinedBorder scale(double t) {
+    return BubbleTailShape(
+      side: side.scale(t),
+      borderRadius: borderRadius * t,
+      tailWidth: tailWidth * t,
+      tailHeight: tailHeight * t,
+    );
+  }
+
+  @override
+  Path getInnerPath(Rect rect, {TextDirection? textDirection}) {
+    return _getPath(rect.deflate(side.width));
+  }
+
+  @override
+  Path getOuterPath(Rect rect, {TextDirection? textDirection}) {
+    return _getPath(rect);
+  }
+
+  Path _getPath(Rect rect) {
+    final double r = borderRadius;
+    final double tW = tailWidth;
+    final double tH = tailHeight;
+
+    final path = Path();
+    final double bottomY = rect.bottom - tH; 
+
+    path.moveTo(rect.left + r, rect.top);
+    
+    path.lineTo(rect.right - r, rect.top);
+    path.arcToPoint(Offset(rect.right, rect.top + r), radius: Radius.circular(r));
+    
+    path.lineTo(rect.right, bottomY - r);
+    path.arcToPoint(Offset(rect.right - r, bottomY), radius: Radius.circular(r));
+    
+    path.lineTo(rect.left + tW, bottomY);
+    
+    path.quadraticBezierTo(rect.left + tW * 0.4, bottomY, rect.left, rect.bottom);
+    path.quadraticBezierTo(rect.left + tW * 0.2, bottomY - tH * 0.2, rect.left, bottomY - r);
+    
+    path.lineTo(rect.left, rect.top + r);
+    path.arcToPoint(Offset(rect.left + r, rect.top), radius: Radius.circular(r));
+    
+    path.close();
+    return path;
+  }
+
+  @override
+  void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {
+    if (side.style == BorderStyle.none) return;
+    final paint = side.toPaint();
+    canvas.drawPath(getOuterPath(rect), paint);
+  }
+}
+
+class BubbleTailClipper extends CustomClipper<Path> {
+  final double borderRadius;
+  BubbleTailClipper({this.borderRadius = 28.0});
+  
+  @override
+  Path getClip(Size size) {
+    return BubbleTailShape(borderRadius: borderRadius).getOuterPath(Offset.zero & size);
+  }
+  @override
+  bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
+}
+
+
+// ============================================================================
+// NEW: INSTAGRAM-STYLE IMAGE CAROUSEL
+// ============================================================================
+class ImageCarousel extends StatefulWidget {
+  final List<String> imageUrls;
+  final double height;
+  final void Function(String) onImageTap;
+
+  const ImageCarousel({
+    Key? key,
+    required this.imageUrls,
+    this.height = 300, 
+    required this.onImageTap,
+  }) : super(key: key);
+
+  @override
+  State<ImageCarousel> createState() => _ImageCarouselState();
+}
+
+class _ImageCarouselState extends State<ImageCarousel> {
+  int _currentIndex = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.imageUrls.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: SizedBox(
+            height: widget.height,
+            width: double.infinity,
+            // --- FIX: ScrollConfiguration allows MOUSE DRAGGING on Web! ---
+            child: ScrollConfiguration(
+              behavior: ScrollConfiguration.of(context).copyWith(
+                dragDevices: {
+                  PointerDeviceKind.touch,
+                  PointerDeviceKind.mouse,     // Enables clicking and dragging with a mouse!
+                  PointerDeviceKind.trackpad,  // Enables two-finger swiping on laptops!
+                },
+              ),
+              child: PageView.builder(
+                itemCount: widget.imageUrls.length,
+                onPageChanged: (index) {
+                  setState(() => _currentIndex = index);
+                },
+                itemBuilder: (context, index) {
+                  return GestureDetector(
+                    onTap: () => widget.onImageTap(widget.imageUrls[index]),
+                    child: Container(
+                      color: BT.bg, 
+                      child: Image.network(
+                        widget.imageUrls[index],
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => const Center(child: Icon(Icons.broken_image_outlined, color: BT.textTertiary, size: 28)),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+        
+        // --- THE DYNAMIC PILL INDICATORS ---
+        if (widget.imageUrls.length > 1)
+          Padding(
+            padding: const EdgeInsets.only(top: 10.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(widget.imageUrls.length, (index) {
+                final isActive = _currentIndex == index;
+                return AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  margin: const EdgeInsets.symmetric(horizontal: 3.0),
+                  height: 6.0,
+                  width: isActive ? 18.0 : 6.0, // Stretches into a pill when active
+                  decoration: BoxDecoration(
+                    color: isActive ? BT.pastelPurple : BT.divider,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                );
+              }),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -336,6 +552,7 @@ class _HomeScreenState extends State<HomeScreen>
           ),
         ),
         const Spacer(),
+        
         Image.asset('assets/images/Bubble_logo.png', height: 38,
           errorBuilder: (_, __, ___) => RichText(text: TextSpan(
             style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, letterSpacing: -0.5),
@@ -346,6 +563,7 @@ class _HomeScreenState extends State<HomeScreen>
               TextSpan(text: '!', style: TextStyle(color: BT.pastelYellow.withOpacity(1.0), shadows: [Shadow(color: Colors.black.withOpacity(0.15), blurRadius: 2, offset: const Offset(1, 1))])),
             ],
           ))),
+
         const Spacer(),
         Stack(children: [
           GestureDetector(
@@ -540,45 +758,59 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
     _heartCtrl.forward().then((_) => _heartCtrl.reverse());
   }
 
-  void _toggleRepost() async {
-    if (_reposted) return; 
-
-    TextEditingController quoteCtrl = TextEditingController();
-    
-    bool confirm = await showDialog(
+  void _showRepostOptions() {
+    showModalBottomSheet(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: BT.card,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text("Repost", style: TextStyle(fontWeight: FontWeight.w900, color: BT.textPrimary)),
-        content: TextField(
-          controller: quoteCtrl,
-          maxLines: 3,
-          style: const TextStyle(fontSize: 14, color: BT.textPrimary),
-          decoration: InputDecoration(
-            hintText: "Add a comment (optional)...",
-            hintStyle: const TextStyle(color: BT.textTertiary, fontSize: 14),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: BT.divider)),
-            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: BT.divider)),
-            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: BT.pastelPurple)),
-            filled: true,
-            fillColor: BT.bg,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(width: 36, height: 4, decoration: BoxDecoration(color: BT.divider, borderRadius: BorderRadius.circular(2))),
+              const SizedBox(height: 12),
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(color: BT.repostTeal.withOpacity(0.15), shape: BoxShape.circle),
+                  child: const Icon(Icons.repeat_rounded, color: BT.repostTeal, size: 22)
+                ),
+                title: const Text('Repost', style: TextStyle(color: BT.textPrimary, fontWeight: FontWeight.w800, fontSize: 15)),
+                onTap: () {
+                  Navigator.pop(context);
+                  _executeRepost(isQuote: false); 
+                },
+              ),
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(color: BT.pastelPurple.withOpacity(0.2), shape: BoxShape.circle),
+                  child: const Icon(Icons.edit_rounded, color: BT.pastelPurple, size: 22)
+                ),
+                title: const Text('Quote', style: TextStyle(color: BT.textPrimary, fontWeight: FontWeight.w800, fontSize: 15)),
+                onTap: () {
+                  Navigator.pop(context);
+                  _openQuoteScreen();
+                },
+              ),
+            ],
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text("Cancel", style: TextStyle(color: BT.textSecondary, fontWeight: FontWeight.bold))
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text("Repost", style: TextStyle(color: BT.repostTeal, fontWeight: FontWeight.w900))
-          ),
-        ],
       ),
-    ) ?? false;
+    );
+  }
+  
+  void _openQuoteScreen() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => QuoteComposeScreen(post: widget.post))
+    );
+  }
 
-    if (!confirm) return;
+  void _executeRepost({required bool isQuote}) async {
+    if (_reposted) return; 
 
     HapticFeedback.lightImpact();
     setState(() => _reposted = true);
@@ -594,19 +826,21 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
         'repostCount': FieldValue.increment(1),
       });
 
-      final origAuthor = widget.post.isRepost ? widget.post.originalAuthor : widget.post.author;
-      final origSeed = widget.post.isRepost ? widget.post.originalAvatarSeed : widget.post.avatarSeed;
-      final origColor = widget.post.isRepost ? widget.post.originalAvatarColorIndex : widget.post.avatarColorIndex;
-      final origText = widget.post.isRepost ? widget.post.originalText : widget.post.text;
-      final origTime = widget.post.isRepost ? widget.post.originalTimestamp : widget.post.timestamp;
-      final origImage = widget.post.isRepost ? widget.post.originalImageUrl : widget.post.imageUrl;
+      final isStraightRepost = widget.post.isRepost && widget.post.text.isEmpty;
+      final origAuthor = isStraightRepost ? widget.post.originalAuthor : widget.post.author;
+      final origSeed = isStraightRepost ? widget.post.originalAvatarSeed : widget.post.avatarSeed;
+      final origColor = isStraightRepost ? widget.post.originalAvatarColorIndex : widget.post.avatarColorIndex;
+      final origText = isStraightRepost ? widget.post.originalText : widget.post.text;
+      final origTime = isStraightRepost ? widget.post.originalTimestamp : widget.post.timestamp;
+      
+      final origImages = isStraightRepost ? widget.post.originalImageUrls : widget.post.imageUrls;
       final origMusic = widget.post.music?.toMap(); 
 
       await FirebaseFirestore.instance.collection('posts').add({
         'author': myName,
         'avatarSeed': myInitial,
         'avatarColorIndex': math.Random().nextInt(6),
-        'text': quoteCtrl.text.trim(), 
+        'text': '', 
         'mood': 'none',
         'likes': 0,
         'commentCount': 0,
@@ -615,13 +849,14 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
         'displayTime': 'Just now',
         'music': origMusic, 
         'isRepost': true,
+        'originalPostId': isStraightRepost ? widget.post.originalPostId : widget.post.id, 
         'repostedBy': myName,
         'originalAuthor': origAuthor,
         'originalAvatarSeed': origSeed,
         'originalAvatarColorIndex': origColor,
         'originalText': origText,
         'originalTimestamp': origTime,
-        'originalImageUrl': origImage,
+        'originalImageUrls': origImages, 
       });
 
     } catch (e) {
@@ -633,6 +868,33 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
   void _showEditSheet() {
     final editCtrl = TextEditingController(text: widget.post.text);
     bool isSaving = false;
+    
+    MusicTrack? editedMusic = widget.post.music;
+    List<String> existingImageUrls = List.from(widget.post.imageUrls);
+    List<Uint8List> newImageBytes = [];
+
+    Future<void> pickEditImages(StateSetter setModalState) async {
+      final picker = ImagePicker();
+      final pickedFiles = await picker.pickMultiImage();
+      
+      if (pickedFiles.isNotEmpty) {
+        int currentTotal = existingImageUrls.length + newImageBytes.length;
+        int remainingSlots = 4 - currentTotal;
+        if (remainingSlots <= 0) return;
+
+        int takeCount = math.min(pickedFiles.length, remainingSlots);
+        List<Uint8List> bytesList = [];
+        
+        for (int i = 0; i < takeCount; i++) {
+          final bytes = await pickedFiles[i].readAsBytes();
+          bytesList.add(bytes);
+        }
+
+        setModalState(() {
+          newImageBytes.addAll(bytesList);
+        });
+      }
+    }
 
     showModalBottomSheet(
       context: context,
@@ -660,12 +922,33 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
                     borderRadius: BorderRadius.circular(30)),
                   child: TextButton(
                     onPressed: isSaving ? null : () async {
-                      if (editCtrl.text.trim().isEmpty) return;
+                      if (editCtrl.text.trim().isEmpty && editedMusic == null && existingImageUrls.isEmpty && newImageBytes.isEmpty) return;
+                      
                       setModalState(() => isSaving = true);
                       try {
-                        await FirebaseFirestore.instance.collection('posts').doc(widget.post.id).update({
+                        Map<String, dynamic> updates = {
                           'text': editCtrl.text.trim(),
-                        });
+                        };
+
+                        List<String> finalUrls = List.from(existingImageUrls);
+
+                        for (var bytes in newImageBytes) {
+                          String fileName = 'bubbles/${DateTime.now().millisecondsSinceEpoch}_${newImageBytes.indexOf(bytes)}.jpg';
+                          Reference ref = FirebaseStorage.instance.ref().child(fileName);
+                          await ref.putData(bytes);
+                          String url = await ref.getDownloadURL();
+                          finalUrls.add(url);
+                        }
+
+                        updates['imageUrls'] = finalUrls;
+
+                        if (editedMusic != null) {
+                          updates['music'] = editedMusic!.toMap();
+                        } else {
+                          updates['music'] = FieldValue.delete();
+                        }
+
+                        await FirebaseFirestore.instance.collection('posts').doc(widget.post.id).update(updates);
                         if (!mounted) return;
                         Navigator.pop(context); 
                       } catch (e) {
@@ -686,6 +969,87 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
                 decoration: const InputDecoration(
                   border: InputBorder.none,
                   counterStyle: TextStyle(color: BT.textTertiary, fontSize: 11))),
+              
+              // --- LIVE MULTI-IMAGE PREVIEW IN EDIT ---
+              if (existingImageUrls.isNotEmpty || newImageBytes.isNotEmpty) ...[
+                SizedBox(
+                  height: 110,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    children: [
+                      ...existingImageUrls.map((url) => Padding(
+                        padding: const EdgeInsets.only(right: 10),
+                        child: Stack(children: [
+                          ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.network(url, width: 110, height: 110, fit: BoxFit.cover)),
+                          Positioned(top: 6, right: 6, child: GestureDetector(
+                            onTap: () => setModalState(() => existingImageUrls.remove(url)),
+                            child: Container(padding: const EdgeInsets.all(5), decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle), child: const Icon(Icons.close, color: Colors.white, size: 16)))),
+                        ]),
+                      )),
+                      ...newImageBytes.map((bytes) => Padding(
+                        padding: const EdgeInsets.only(right: 10),
+                        child: Stack(children: [
+                          ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.memory(bytes, width: 110, height: 110, fit: BoxFit.cover)),
+                          Positioned(top: 6, right: 6, child: GestureDetector(
+                            onTap: () => setModalState(() => newImageBytes.remove(bytes)),
+                            child: Container(padding: const EdgeInsets.all(5), decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle), child: const Icon(Icons.close, color: Colors.white, size: 16)))),
+                        ]),
+                      )),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+
+              if (editedMusic != null) ...[
+                MusicAttachmentCard(track: editedMusic!),
+                const SizedBox(height: 6),
+                GestureDetector(onTap: () => setModalState(() => editedMusic = null),
+                  child: const Text('Remove', style: TextStyle(color: BT.textTertiary, fontSize: 11.5, decoration: TextDecoration.underline))),
+                const SizedBox(height: 10),
+              ],
+
+              Container(
+                padding: const EdgeInsets.only(top: 10),
+                decoration: const BoxDecoration(border: Border(top: BorderSide(color: BT.divider, width: 1))),
+                child: Row(
+                  children: [
+                    GestureDetector(
+                      onTap: () => pickEditImages(setModalState),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: (existingImageUrls.isNotEmpty || newImageBytes.isNotEmpty) ? BT.pastelBlue.withOpacity(0.1) : BT.bg,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: (existingImageUrls.isNotEmpty || newImageBytes.isNotEmpty) ? BT.pastelBlue.withOpacity(0.4) : BT.divider, width: 1.5)),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(Icons.image_outlined,
+                            color: (existingImageUrls.isNotEmpty || newImageBytes.isNotEmpty) ? const Color(0xFF6AAED6) : BT.textTertiary, size: 15),
+                          const SizedBox(width: 5),
+                          Text((existingImageUrls.isEmpty && newImageBytes.isEmpty) ? 'Image' : '${existingImageUrls.length + newImageBytes.length} / 4 ✓',
+                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                              color: (existingImageUrls.isNotEmpty || newImageBytes.isNotEmpty) ? const Color(0xFF6AAED6) : BT.textTertiary)),
+                        ]))),
+                        
+                    const SizedBox(width: 10),
+                    
+                    GestureDetector(
+                      onTap: () {
+                        showModalBottomSheet(context: context, isScrollControlled: true, backgroundColor: Colors.white, shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+                          builder: (_) => _MusicPickerSheet(onSelect: (t) { setModalState(() => editedMusic = t); Navigator.pop(context); }));
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(color: editedMusic != null ? BT.spotify.withOpacity(0.1) : BT.bg, borderRadius: BorderRadius.circular(20), border: Border.all(color: editedMusic != null ? BT.spotify.withOpacity(0.4) : BT.divider, width: 1.5)),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(Icons.music_note_rounded, color: editedMusic != null ? BT.spotify : BT.textTertiary, size: 15),
+                          const SizedBox(width: 5),
+                          Text(editedMusic != null ? 'Music ✓' : 'Music', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: editedMusic != null ? BT.spotify : BT.textTertiary)),
+                        ]))),
+                  ],
+                ),
+              )
+
             ]),
           ),
         ),
@@ -736,6 +1100,11 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
                   Navigator.pop(context); 
                   HapticFeedback.mediumImpact();
                   try {
+                    if (widget.post.isRepost && widget.post.originalPostId != null) {
+                      await FirebaseFirestore.instance.collection('posts').doc(widget.post.originalPostId).update({
+                        'repostCount': FieldValue.increment(-1),
+                      });
+                    }
                     await FirebaseFirestore.instance.collection('posts').doc(widget.post.id).delete();
                   } catch (e) {
                     if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
@@ -751,8 +1120,6 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
-    if (widget.post.isRepost) return _buildRepostCard();
-
     return GestureDetector(
       onTap: () {
         if (!widget.isPopped) { 
@@ -765,60 +1132,75 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
       child: AnimatedCrossFade(
         duration: const Duration(milliseconds: 320),
         crossFadeState: widget.isPopped ? CrossFadeState.showSecond : CrossFadeState.showFirst,
-        firstChild: _buildBubble(),
-        secondChild: _buildNormalCard(),
+        firstChild: ClipPath(
+          clipper: BubbleTailClipper(borderRadius: 28),
+          child: _buildBubble(),
+        ),
+        secondChild: widget.post.isRepost 
+            ? (widget.post.text.isEmpty ? _buildStraightRepostCard() : _buildQuoteRepostCard()) 
+            : _buildNormalCard(),
       ),
     );
   }
 
   Widget _buildBubble() {
     final pastel = BT.pastelAt(widget.post.avatarColorIndex);
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(20),
-      child: SizedBox(
-        width: double.infinity, height: 130,
-        child: Stack(fit: StackFit.expand, children: [
-          Container(decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft, end: Alignment.bottomRight,
-              colors: [pastel.withOpacity(0.5), BT.pastelBlue.withOpacity(0.3)]))),
-          Image.asset(widget.bubbleAsset, fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => const SizedBox()),
-          BackdropFilter(filter: ImageFilter.blur(sigmaX: 3, sigmaY: 3),
-            child: Container(color: Colors.white.withOpacity(0.3))),
-          const Positioned(top: 16, left: 20, child: _Sparkle()),
-          const Positioned(bottom: 18, right: 24, child: _Sparkle()),
-          Center(child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 11),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.9),
-              borderRadius: BorderRadius.circular(30),
-              boxShadow: [BoxShadow(color: pastel.withOpacity(0.4), blurRadius: 16)]),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Text('💬', style: TextStyle(fontSize: 16)),
-              const SizedBox(width: 8),
-              const Text('Tap to pop!', style: TextStyle(
-                color: BT.textPrimary, fontWeight: FontWeight.w800, fontSize: 14)),
-            ]),
-          )),
-        ]),
-      ),
+    return SizedBox(
+      width: double.infinity, height: 130 + 16, 
+      child: Stack(fit: StackFit.expand, children: [
+        Container(decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft, end: Alignment.bottomRight,
+            colors: [pastel.withOpacity(0.5), BT.pastelBlue.withOpacity(0.3)]))),
+        Image.asset(widget.bubbleAsset, fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => const SizedBox()),
+        BackdropFilter(filter: ImageFilter.blur(sigmaX: 3, sigmaY: 3),
+          child: Container(color: Colors.white.withOpacity(0.3))),
+        const Positioned(top: 16, left: 20, child: _Sparkle()),
+        const Positioned(bottom: 34, right: 24, child: _Sparkle()), 
+        Positioned(
+          top: 0, bottom: 16, left: 0, right: 0,
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 11),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.9),
+                borderRadius: BorderRadius.circular(30),
+                boxShadow: [BoxShadow(color: pastel.withOpacity(0.4), blurRadius: 16)]),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Text('💬', style: TextStyle(fontSize: 16)),
+                const SizedBox(width: 8),
+                const Text('Tap to pop!', style: TextStyle(
+                  color: BT.textPrimary, fontWeight: FontWeight.w800, fontSize: 14)),
+              ]),
+            ),
+          ),
+        ),
+      ]),
     );
   }
 
   Widget _buildNormalCard() {
     final p = widget.post;
     return Container(
-      decoration: BoxDecoration(
+      padding: const EdgeInsets.only(bottom: 16),
+      decoration: ShapeDecoration(
         color: BT.card,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: BT.divider, width: 1),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 12, offset: const Offset(0, 3))],
+        shape: const BubbleTailShape(
+          borderRadius: 28,
+          side: BorderSide(color: BT.divider, width: 1),
+        ),
+        shadows: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 12, offset: const Offset(0, 3))],
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         _buildCardHeader(p.author, p.avatarSeed, p.avatarColorIndex, p.timestamp, p.mood),
         _buildCardText(p.text),
-        if (p.imageUrl != null) _buildCardImage(p.imageUrl!),
+        
+        // NOW USING THE SLIDING CAROUSEL
+        if (p.imageUrls.isNotEmpty) Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+          child: ImageCarousel(imageUrls: p.imageUrls, onImageTap: _openViewer)),
+          
         if (p.music != null) Padding(
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
           child: MusicAttachmentCard(track: p.music!)),
@@ -828,125 +1210,127 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
     );
   }
 
-  Widget _buildRepostCard() {
+  Widget _buildStraightRepostCard() {
     final p = widget.post;
-    final hasComment = p.text.isNotEmpty;
-
     return Container(
-      decoration: BoxDecoration(
+      padding: const EdgeInsets.only(bottom: 16),
+      decoration: ShapeDecoration(
         color: BT.card,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: BT.divider, width: 1),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 12, offset: const Offset(0, 3))],
+        shape: const BubbleTailShape(
+          borderRadius: 28,
+          side: BorderSide(color: BT.divider, width: 1),
+        ),
+        shadows: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 12, offset: const Offset(0, 3))],
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
-          child: Row(children: [
-            const Icon(Icons.repeat_rounded, size: 13, color: BT.repostTeal),
-            const SizedBox(width: 5),
-            Text('${p.repostedBy} reposted',
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: BT.repostTeal)),
-            const Spacer(),
-            GestureDetector(
-              onTap: _showOptionsSheet,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                color: Colors.transparent, 
-                child: const Icon(Icons.more_horiz_rounded, color: BT.textTertiary, size: 20),
-              ),
-            ),
-          ]),
-        ),
-        if (hasComment) ...[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              _BubbleAvatar(seed: p.avatarSeed, colorIndex: p.avatarColorIndex, radius: 17),
-              const SizedBox(width: 9),
-              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  Text(p.author, style: const TextStyle(fontWeight: FontWeight.w800, color: BT.textPrimary, fontSize: 13)),
-                  const SizedBox(width: 5),
-                  const Text('·', style: TextStyle(color: BT.textTertiary, fontSize: 14, fontWeight: FontWeight.w600)),
-                  const SizedBox(width: 5),
-                  Text(p.timestamp, style: const TextStyle(color: BT.textTertiary, fontSize: 11.5)),
-                ]),
-                const SizedBox(height: 3),
-                Text(p.text, style: const TextStyle(fontSize: 14, color: BT.textPrimary, height: 1.4)),
-              ])),
-            ]),
-          ),
-        ] else
-          const SizedBox(height: 10),
-
-        Padding(
-          padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-          child: GestureDetector(
-            onTap: widget.onCardTap,
-            child: Container(
-              decoration: BoxDecoration(
-                color: BT.bg,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: BT.divider, width: 1),
-              ),
-              child: IntrinsicHeight(
-                child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                  Container(
-                    width: 3.5,
-                    decoration: BoxDecoration(
-                      color: BT.pastelAt(p.originalAvatarColorIndex),
-                      borderRadius: const BorderRadius.only(
-                        topLeft: Radius.circular(14), bottomLeft: Radius.circular(14)),
-                    ),
-                  ),
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Row(children: [
-                          _BubbleAvatar(seed: p.originalAvatarSeed ?? 'X',
-                            colorIndex: p.originalAvatarColorIndex, radius: 14),
-                          const SizedBox(width: 7),
-                          Text(p.originalAuthor ?? '', style: const TextStyle(
-                            fontWeight: FontWeight.w800, color: BT.textPrimary, fontSize: 12.5)),
-                          const SizedBox(width: 4),
-                          const Text('·', style: TextStyle(color: BT.textTertiary, fontSize: 12)),
-                          const SizedBox(width: 4),
-                          Text(p.originalTimestamp ?? '', style: const TextStyle(
-                            color: BT.textTertiary, fontSize: 11)),
-                        ]),
-                        const SizedBox(height: 6),
-                        Text(p.originalText ?? '', style: const TextStyle(
-                          fontSize: 13.5, color: BT.textPrimary, height: 1.4)),
-                        if (p.originalImageUrl != null) ...[
-                          const SizedBox(height: 8),
-                          ClipRRect(borderRadius: BorderRadius.circular(10),
-                            child: Image.network(p.originalImageUrl!, width: double.infinity,
-                              height: 140, fit: BoxFit.cover)),
-                        ],
-                        if (p.music != null) ...[
-                          const SizedBox(height: 10),
-                          MusicAttachmentCard(track: p.music!),
-                        ],
-                      ]),
-                    ),
-                  ),
-                ]),
-              ),
-            ),
+          padding: const EdgeInsets.fromLTRB(48, 12, 14, 0), 
+          child: Row(
+            children: [
+              const Icon(Icons.repeat_rounded, size: 14, color: BT.textTertiary),
+              const SizedBox(width: 5),
+              Text('${p.repostedBy} reposted', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: BT.textTertiary)),
+            ],
           ),
         ),
-
+        _buildCardHeader(p.originalAuthor ?? '', p.originalAvatarSeed ?? 'X', p.originalAvatarColorIndex, p.originalTimestamp ?? '', p.mood, topPadding: 4),
+        _buildCardText(p.originalText ?? ''),
+        
+        if (p.originalImageUrls.isNotEmpty) Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+          child: ImageCarousel(imageUrls: p.originalImageUrls, onImageTap: _openViewer)),
+          
+        if (p.music != null) Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+          child: MusicAttachmentCard(track: p.music!)
+        ),
         const Divider(height: 1, color: BT.divider),
         _buildActions(),
       ]),
     );
   }
 
-  Widget _buildCardHeader(String author, String seed, int colorIdx, String time, MoodTag mood) {
+  Widget _buildQuoteRepostCard() {
+    final p = widget.post;
+    return Container(
+      padding: const EdgeInsets.only(bottom: 16), 
+      decoration: ShapeDecoration(
+        color: BT.card,
+        shape: const BubbleTailShape(
+          borderRadius: 28,
+          side: BorderSide(color: BT.divider, width: 1),
+        ),
+        shadows: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 12, offset: const Offset(0, 3))],
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _buildCardHeader(p.author, p.avatarSeed, p.avatarColorIndex, p.timestamp, p.mood),
+        _buildCardText(p.text), 
+        
+        if (p.imageUrls.isNotEmpty) Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+          child: ImageCarousel(imageUrls: p.imageUrls, onImageTap: _openViewer)),
+        
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+          child: GestureDetector(
+            onTap: widget.onCardTap,
+            child: Container(
+              decoration: BoxDecoration(
+                color: BT.card, 
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: BT.divider, width: 1.5),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+                      child: Row(
+                        children: [
+                          _BubbleAvatar(seed: p.originalAvatarSeed ?? 'X', colorIndex: p.originalAvatarColorIndex, radius: 11),
+                          const SizedBox(width: 8),
+                          Text(p.originalAuthor ?? '', style: const TextStyle(fontWeight: FontWeight.w800, color: BT.textPrimary, fontSize: 13.5)),
+                          const SizedBox(width: 4),
+                          const Text('·', style: TextStyle(color: BT.textTertiary, fontSize: 13)),
+                          const SizedBox(width: 4),
+                          Expanded(child: Text(p.originalTimestamp ?? '', style: const TextStyle(color: BT.textTertiary, fontSize: 12), overflow: TextOverflow.ellipsis)),
+                        ]
+                      )
+                    ),
+                    if ((p.originalText ?? '').isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                        child: Text(p.originalText!, style: const TextStyle(fontSize: 14, color: BT.textPrimary, height: 1.4))
+                      ),
+                    
+                    if (p.originalImageUrls.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 2), 
+                        child: ImageCarousel(imageUrls: p.originalImageUrls, height: 160, onImageTap: _openViewer),
+                      ),
+                      
+                    if (p.music != null)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                        child: MusicAttachmentCard(track: p.music!)
+                      ),
+                  ]
+                )
+              )
+            )
+          )
+        ),
+        const Divider(height: 1, color: BT.divider),
+        _buildActions(),
+      ]),
+    );
+  }
+
+  Widget _buildCardHeader(String author, String seed, int colorIdx, String time, MoodTag mood, {double topPadding = 14}) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 8),
+      padding: EdgeInsets.fromLTRB(14, topPadding, 14, 8),
       child: Row(children: [
         _BubbleAvatar(seed: seed, colorIndex: colorIdx, radius: 18),
         const SizedBox(width: 10),
@@ -959,7 +1343,7 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
         ])),
         if (mood != MoodTag.none) ...[_MoodPill(mood: mood), const SizedBox(width: 6)],
         GestureDetector(
-          onTap: _showOptionsSheet,
+          onTap: _showOptionsSheet, 
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
             color: Colors.transparent, 
@@ -977,15 +1361,30 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
       child: Text(text, style: const TextStyle(fontSize: 14.5, color: BT.textPrimary, height: 1.45)));
   }
 
-  Widget _buildCardImage(String url) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: Image.network(url, width: double.infinity, height: 220, fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => Container(height: 220,
-            decoration: BoxDecoration(color: BT.pastelBlue.withOpacity(0.15), borderRadius: BorderRadius.circular(12)),
-            child: const Center(child: Icon(Icons.image_outlined, color: BT.textTertiary, size: 36))))));
+  void _openViewer(String url) {
+    Navigator.push(context, MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (context) => Scaffold(
+        backgroundColor: Colors.black,
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.close_rounded),
+            onPressed: () => Navigator.pop(context),
+          ),
+        ),
+        body: Center(
+          child: InteractiveViewer(
+            panEnabled: true,
+            minScale: 0.5,
+            maxScale: 4.0, 
+            child: Image.network(url, fit: BoxFit.contain),
+          ),
+        ),
+      )
+    ));
   }
 
   Widget _buildActions() {
@@ -1018,7 +1417,7 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
           ])),
         const SizedBox(width: 20),
         GestureDetector(
-          onTap: _toggleRepost,
+          onTap: _showRepostOptions,
           child: Row(children: [
             Icon(Icons.repeat_rounded,
               color: _reposted ? BT.repostTeal : BT.textTertiary, size: 20),
@@ -1039,7 +1438,7 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
 }
 
 // ============================================================================
-// MUSIC ATTACHMENT CARD (THE APPLE MUSIC HACK)
+// MUSIC ATTACHMENT CARD
 // ============================================================================
 class MusicAttachmentCard extends StatefulWidget {
   final MusicTrack track;
@@ -1211,7 +1610,7 @@ class _MusicAttachmentCardState extends State<MusicAttachmentCard>
 }
 
 // ============================================================================
-// THREAD SCREEN
+// THREAD SCREEN (WITH LIVE COMMENTS & OPTIONS)
 // ============================================================================
 class ThreadScreen extends StatefulWidget {
   final Post post;
@@ -1222,10 +1621,138 @@ class ThreadScreen extends StatefulWidget {
 
 class _ThreadScreenState extends State<ThreadScreen> {
   final _ctrl = TextEditingController();
-  final List<Map<String, dynamic>> _replies = [];
 
   @override
   void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  Future<void> _toggleCommentLike(String commentId, List<dynamic> likes) async {
+    final currentUserUid = FirebaseAuth.instance.currentUser?.uid;
+    if (currentUserUid == null) return;
+    
+    HapticFeedback.lightImpact();
+    final ref = FirebaseFirestore.instance.collection('posts').doc(widget.post.id).collection('comments').doc(commentId);
+    
+    if (likes.contains(currentUserUid)) {
+      await ref.update({'likes': FieldValue.arrayRemove([currentUserUid])});
+    } else {
+      await ref.update({'likes': FieldValue.arrayUnion([currentUserUid])});
+    }
+  }
+
+  void _showEditCommentSheet(String commentId, String currentText) {
+    final editCtrl = TextEditingController(text: currentText);
+    bool isSaving = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                Row(children: [
+                  Container(width: 3.5, height: 22,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(colors: [BT.pastelBlue, BT.pastelPurple]),
+                      borderRadius: BorderRadius.circular(2))),
+                  const SizedBox(width: 10),
+                  const Text('Edit Reply', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: BT.textPrimary)),
+                ]),
+                Container(
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(colors: [BT.pastelBlue, BT.pastelPurple]),
+                    borderRadius: BorderRadius.circular(30)),
+                  child: TextButton(
+                    onPressed: isSaving ? null : () async {
+                      if (editCtrl.text.trim().isEmpty) return;
+                      setModalState(() => isSaving = true);
+                      try {
+                        await FirebaseFirestore.instance.collection('posts').doc(widget.post.id).collection('comments').doc(commentId).update({
+                          'text': editCtrl.text.trim(),
+                        });
+                        if (!mounted) return;
+                        Navigator.pop(context); 
+                      } catch (e) {
+                        setModalState(() => isSaving = false);
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to edit: $e')));
+                      }
+                    }, 
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 9),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30))),
+                    child: isSaving 
+                      ? const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : const Text('Save', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13)))),
+              ]),
+              const SizedBox(height: 16),
+              TextField(controller: editCtrl, autofocus: true, maxLines: 4, maxLength: 280,
+                style: const TextStyle(fontSize: 15, color: BT.textPrimary, height: 1.5),
+                decoration: const InputDecoration(
+                  border: InputBorder.none,
+                  counterStyle: TextStyle(color: BT.textTertiary, fontSize: 11))),
+            ]),
+          ),
+        ),
+      )
+    );
+  }
+
+  void _showCommentOptions(String commentId, String currentText) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(width: 36, height: 4, decoration: BoxDecoration(color: BT.divider, borderRadius: BorderRadius.circular(2))),
+              const SizedBox(height: 12),
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(color: BT.pastelBlue.withOpacity(0.15), shape: BoxShape.circle),
+                  child: const Icon(Icons.edit_rounded, color: Color(0xFF6AAED6), size: 22)
+                ),
+                title: const Text('Edit reply', style: TextStyle(color: BT.textPrimary, fontWeight: FontWeight.w700, fontSize: 15)),
+                onTap: () {
+                  Navigator.pop(context); 
+                  _showEditCommentSheet(commentId, currentText);       
+                },
+              ),
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(color: BT.heartRed.withOpacity(0.1), shape: BoxShape.circle),
+                  child: const Icon(Icons.delete_outline_rounded, color: BT.heartRed, size: 22)
+                ),
+                title: const Text('Delete reply', style: TextStyle(color: BT.heartRed, fontWeight: FontWeight.w700, fontSize: 15)),
+                onTap: () async {
+                  Navigator.pop(context); 
+                  HapticFeedback.mediumImpact();
+                  try {
+                    await FirebaseFirestore.instance.collection('posts').doc(widget.post.id).collection('comments').doc(commentId).delete();
+                    await FirebaseFirestore.instance.collection('posts').doc(widget.post.id).update({
+                      'commentCount': FieldValue.increment(-1)
+                    });
+                  } catch (e) {
+                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1249,12 +1776,36 @@ class _ThreadScreenState extends State<ThreadScreen> {
             const Divider(height: 1, color: BT.divider),
             const Padding(padding: EdgeInsets.symmetric(vertical: 10),
               child: Text('Replies', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: BT.textSecondary))),
-            ..._replies.map((r) => _buildReply(r)),
-            if (_replies.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 20),
-                child: Center(child: Text("No replies yet. Be the first!", style: TextStyle(color: BT.textTertiary))),
-              )
+            
+            StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('posts')
+                  .doc(widget.post.id)
+                  .collection('comments')
+                  .orderBy('createdAt', descending: false) 
+                  .snapshots(),
+              builder: (context, snapshot) {
+                if (snapshot.hasError) {
+                  return const Center(child: Text('Error loading replies.'));
+                }
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator(color: BT.pastelPurple)));
+                }
+
+                final docs = snapshot.data?.docs ?? [];
+
+                if (docs.isEmpty) {
+                  return const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 20),
+                    child: Center(child: Text("No replies yet. Be the first!", style: TextStyle(color: BT.textTertiary))),
+                  );
+                }
+
+                return Column(
+                  children: docs.map((doc) => _buildReply(doc)).toList(),
+                );
+              }
+            ),
           ])),
         _buildReplyBar(),
       ]),
@@ -1262,77 +1813,93 @@ class _ThreadScreenState extends State<ThreadScreen> {
   }
 
   Widget _buildOrigPost() {
-    final p = widget.post;
-    return Container(
-      decoration: BoxDecoration(
-        color: BT.card, borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: BT.pastelPurple.withOpacity(0.5), width: 1.5),
-        boxShadow: [BoxShadow(color: BT.pastelPurple.withOpacity(0.15), blurRadius: 16, offset: const Offset(0, 4))]),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(14, 14, 14, 8),
-          child: Row(children: [
-            _BubbleAvatar(seed: p.avatarSeed, colorIndex: p.avatarColorIndex, radius: 18),
-            const SizedBox(width: 10),
-            Expanded(child: Row(children: [
-              Text(p.author, style: const TextStyle(fontWeight: FontWeight.w800, color: BT.textPrimary, fontSize: 13.5)),
-              const SizedBox(width: 5),
-              const Text('·', style: TextStyle(color: BT.textTertiary, fontSize: 14)),
-              const SizedBox(width: 5),
-              Text(p.timestamp, style: const TextStyle(color: BT.textTertiary, fontSize: 12)),
-            ])),
-            if (p.mood != MoodTag.none) _MoodPill(mood: p.mood),
-          ])),
-        if (p.imageUrl != null)
-          Padding(padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
-            child: ClipRRect(borderRadius: BorderRadius.circular(12),
-              child: Image.network(p.imageUrl!, width: double.infinity, height: 200, fit: BoxFit.cover))),
-        Padding(padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
-          child: Text(p.text, style: const TextStyle(fontSize: 15, color: BT.textPrimary, height: 1.5))),
-        if (p.music != null)
-          Padding(padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-            child: MusicAttachmentCard(track: p.music!)),
-        const Divider(height: 1, color: BT.divider),
-        Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          child: Row(children: [
-            const Icon(Icons.favorite_border_rounded, color: BT.textTertiary, size: 18),
-            const SizedBox(width: 4),
-            Text('${p.likes}', style: const TextStyle(color: BT.textTertiary, fontWeight: FontWeight.w600, fontSize: 13)),
-            const SizedBox(width: 18),
-            const Icon(Icons.chat_bubble_outline_rounded, color: BT.textTertiary, size: 17),
-            const SizedBox(width: 4),
-            Text('${p.commentCount}', style: const TextStyle(color: BT.textTertiary, fontWeight: FontWeight.w600, fontSize: 13)),
-            const SizedBox(width: 18),
-            const Icon(Icons.repeat_rounded, color: BT.textTertiary, size: 18),
-            const SizedBox(width: 4),
-            Text('${p.repostCount}', style: const TextStyle(color: BT.textTertiary, fontWeight: FontWeight.w600, fontSize: 13)),
-          ])),
-      ]),
+    return RantCard(
+      post: widget.post,
+      bubbleAsset: 'assets/images/image_0.png',
+      isPopped: true,
+      onPopAction: () {},
+      onCardTap: () {}, 
     );
   }
 
-  Widget _buildReply(Map<String, dynamic> r) {
+  Widget _buildReply(DocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
+    final commentId = doc.id;
+    final likes = data['likes'] as List<dynamic>? ?? [];
+    
+    final currentUserUid = FirebaseAuth.instance.currentUser?.uid;
+    final isLiked = currentUserUid != null && likes.contains(currentUserUid);
+    
+    final myName = FirebaseAuth.instance.currentUser?.displayName != null 
+        ? '@${FirebaseAuth.instance.currentUser!.displayName}' 
+        : '@Me';
+    final isMyComment = data['uid'] == currentUserUid || data['author'] == myName;
+    
+    String formattedTime = 'Just now';
+    if (data['createdAt'] != null) {
+      DateTime dt = (data['createdAt'] as Timestamp).toDate();
+      formattedTime = DateFormat('MMM d, h:mm a').format(dt);
+    }
+
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      decoration: BoxDecoration(color: BT.card, borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: BT.divider, width: 1)),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        _BubbleAvatar(seed: r['seed'] as String, colorIndex: r['ci'] as int, radius: 17),
-        const SizedBox(width: 10),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Text(r['author'] as String, style: const TextStyle(fontWeight: FontWeight.w800, color: BT.textPrimary, fontSize: 13)),
-            const SizedBox(width: 5),
-            const Text('·', style: TextStyle(color: BT.textTertiary)),
-            const SizedBox(width: 5),
-            Text(r['time'] as String, style: const TextStyle(color: BT.textTertiary, fontSize: 11.5)),
-          ]),
-          const SizedBox(height: 5),
-          Text(r['text'] as String, style: const TextStyle(fontSize: 13.5, color: BT.textPrimary, height: 1.4)),
-        ])),
-        const Icon(Icons.favorite_border_rounded, color: BT.divider, size: 16),
-      ]),
+      padding: const EdgeInsets.only(bottom: 16), 
+      decoration: ShapeDecoration(
+        color: BT.card, 
+        shape: const BubbleTailShape(
+          borderRadius: 24,
+          side: BorderSide(color: BT.divider, width: 1),
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _BubbleAvatar(
+            seed: data['avatarSeed'] ?? 'X', 
+            colorIndex: data['avatarColorIndex'] ?? 0, 
+            radius: 17
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Text(data['author'] ?? 'Unknown', style: const TextStyle(fontWeight: FontWeight.w800, color: BT.textPrimary, fontSize: 13)),
+              const SizedBox(width: 5),
+              const Text('·', style: TextStyle(color: BT.textTertiary)),
+              const SizedBox(width: 5),
+              Text(formattedTime, style: const TextStyle(color: BT.textTertiary, fontSize: 11.5)),
+              const Spacer(),
+              if (isMyComment)
+                GestureDetector(
+                  onTap: () => _showCommentOptions(commentId, data['text'] ?? ''),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    color: Colors.transparent, 
+                    child: const Icon(Icons.more_horiz_rounded, color: BT.textTertiary, size: 16),
+                  ),
+                ),
+            ]),
+            const SizedBox(height: 5),
+            Text(data['text'] ?? '', style: const TextStyle(fontSize: 13.5, color: BT.textPrimary, height: 1.4)),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                GestureDetector(
+                  onTap: () => _toggleCommentLike(commentId, likes),
+                  child: Icon(
+                    isLiked ? Icons.favorite_rounded : Icons.favorite_border_rounded, 
+                    color: isLiked ? BT.heartRed : BT.divider, 
+                    size: 16
+                  ),
+                ),
+                if (likes.isNotEmpty) ...[
+                  const SizedBox(width: 4),
+                  Text('${likes.length}', style: TextStyle(color: isLiked ? BT.heartRed : BT.textTertiary, fontSize: 12, fontWeight: FontWeight.w600)),
+                ]
+              ],
+            )
+          ])),
+        ]),
+      ),
     );
   }
 
@@ -1355,13 +1922,36 @@ class _ThreadScreenState extends State<ThreadScreen> {
             hintStyle: TextStyle(color: BT.textTertiary, fontSize: 14),
             border: InputBorder.none, isDense: true))),
         GestureDetector(
-          onTap: () {
+          onTap: () async {
             if (_ctrl.text.trim().isNotEmpty) {
-              setState(() {
-                _replies.add({'seed': initial, 'ci': 4, 'author': name,
-                  'text': _ctrl.text.trim(), 'time': 'Just now'});
-                _ctrl.clear();
-              });
+              final text = _ctrl.text.trim();
+              _ctrl.clear(); 
+              FocusScope.of(context).unfocus(); 
+              
+              try {
+                await FirebaseFirestore.instance
+                  .collection('posts')
+                  .doc(widget.post.id)
+                  .collection('comments')
+                  .add({
+                    'uid': currentUser?.uid, 
+                    'likes': [], 
+                    'author': name,
+                    'avatarSeed': initial,
+                    'avatarColorIndex': math.Random().nextInt(6),
+                    'text': text,
+                    'createdAt': FieldValue.serverTimestamp(),
+                  });
+                  
+                await FirebaseFirestore.instance
+                  .collection('posts')
+                  .doc(widget.post.id)
+                  .update({
+                    'commentCount': FieldValue.increment(1) 
+                  });
+              } catch (e) {
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to comment: $e')));
+              }
             }
           },
           child: Container(padding: const EdgeInsets.all(9),
@@ -1370,6 +1960,251 @@ class _ThreadScreenState extends State<ThreadScreen> {
               shape: BoxShape.circle),
             child: const Icon(Icons.send_rounded, color: Colors.white, size: 17))),
       ]),
+    );
+  }
+}
+
+// ============================================================================
+// QUOTE COMPOSE SCREEN
+// ============================================================================
+class QuoteComposeScreen extends StatefulWidget {
+  final Post post;
+  const QuoteComposeScreen({Key? key, required this.post}) : super(key: key);
+  @override
+  State<QuoteComposeScreen> createState() => _QuoteComposeScreenState();
+}
+
+class _QuoteComposeScreenState extends State<QuoteComposeScreen> {
+  final _ctrl = TextEditingController();
+  
+  List<Uint8List> _imagesBytes = [];
+  bool _isPosting = false;
+
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  Future<void> _pickImages() async {
+    final picker = ImagePicker();
+    final pickedFiles = await picker.pickMultiImage();
+    
+    if (pickedFiles.isNotEmpty) {
+      List<Uint8List> newBytes = [];
+      
+      int remainingSlots = 4 - _imagesBytes.length;
+      if (remainingSlots <= 0) return; 
+
+      int takeCount = math.min(pickedFiles.length, remainingSlots);
+      for (int i = 0; i < takeCount; i++) {
+        final bytes = await pickedFiles[i].readAsBytes();
+        newBytes.add(bytes);
+      }
+
+      setState(() {
+        _imagesBytes.addAll(newBytes);
+      });
+    }
+  }
+
+  Future<void> _submitQuote() async {
+    if (_ctrl.text.trim().isEmpty && _imagesBytes.isEmpty) return;
+    
+    setState(() => _isPosting = true);
+    
+    final currentUser = FirebaseAuth.instance.currentUser;
+    final myName = currentUser?.displayName != null && currentUser!.displayName!.isNotEmpty 
+        ? '@${currentUser.displayName}' 
+        : '@Me';
+    final myInitial = myName.replaceAll('@', '').substring(0, 1).toUpperCase();
+
+    try {
+      List<String> imageUrls = [];
+      
+      for (var bytes in _imagesBytes) {
+        String fileName = 'bubbles/${DateTime.now().millisecondsSinceEpoch}_${_imagesBytes.indexOf(bytes)}.jpg';
+        Reference ref = FirebaseStorage.instance.ref().child(fileName);
+        await ref.putData(bytes);
+        String url = await ref.getDownloadURL();
+        imageUrls.add(url);
+      }
+
+      await FirebaseFirestore.instance.collection('posts').doc(widget.post.id).update({
+        'repostCount': FieldValue.increment(1),
+      });
+
+      final p = widget.post;
+      final isStraightRepost = p.isRepost && p.text.isEmpty;
+      final origAuthor = isStraightRepost ? p.originalAuthor : p.author;
+      final origSeed = isStraightRepost ? p.originalAvatarSeed : p.avatarSeed;
+      final origColor = isStraightRepost ? p.originalAvatarColorIndex : p.avatarColorIndex;
+      final origText = isStraightRepost ? p.originalText : p.text;
+      final origTime = isStraightRepost ? p.originalTimestamp : p.timestamp;
+      
+      final origImages = isStraightRepost ? p.originalImageUrls : p.imageUrls;
+      final origMusic = p.music?.toMap(); 
+
+      await FirebaseFirestore.instance.collection('posts').add({
+        'author': myName,
+        'avatarSeed': myInitial,
+        'avatarColorIndex': math.Random().nextInt(6),
+        'text': _ctrl.text.trim(), 
+        'mood': 'none',
+        'likes': 0,
+        'commentCount': 0,
+        'repostCount': 0,
+        'createdAt': FieldValue.serverTimestamp(),
+        'displayTime': 'Just now',
+        'music': origMusic, 
+        'imageUrls': imageUrls, 
+        'isRepost': true,
+        'originalPostId': isStraightRepost ? p.originalPostId : p.id, 
+        'repostedBy': myName,
+        'originalAuthor': origAuthor,
+        'originalAvatarSeed': origSeed,
+        'originalAvatarColorIndex': origColor,
+        'originalText': origText,
+        'originalTimestamp': origTime,
+        'originalImageUrls': origImages, 
+      });
+
+      if (!mounted) return;
+      Navigator.pop(context, 'success'); 
+    } catch (e) {
+      setState(() => _isPosting = false);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to post: $e')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    final initial = currentUser?.displayName?.isNotEmpty == true ? currentUser!.displayName![0].toUpperCase() : '✦';
+    
+    final p = widget.post;
+    final isStraightRepost = p.isRepost && p.text.isEmpty;
+    final origAuthor = isStraightRepost ? p.originalAuthor : p.author;
+    final origSeed = isStraightRepost ? p.originalAvatarSeed : p.avatarSeed;
+    final origColor = isStraightRepost ? p.originalAvatarColorIndex : p.avatarColorIndex;
+    final origText = isStraightRepost ? p.originalText : p.text;
+    final origTime = isStraightRepost ? p.originalTimestamp : p.timestamp;
+    
+    final origImages = isStraightRepost ? p.originalImageUrls : p.imageUrls;
+    final origMusic = p.music; 
+
+    return Scaffold(
+      backgroundColor: BT.bg,
+      appBar: AppBar(
+        backgroundColor: BT.bg, elevation: 0, surfaceTintColor: Colors.transparent,
+        leadingWidth: 80,
+        leading: TextButton(onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel', style: TextStyle(color: BT.textPrimary, fontSize: 16))),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            child: ElevatedButton(
+              onPressed: _isPosting ? null : _submitQuote,
+              style: ElevatedButton.styleFrom(backgroundColor: BT.pastelPurple, foregroundColor: Colors.white, elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20))),
+              child: _isPosting 
+                  ? const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  : const Text('Post', style: TextStyle(fontWeight: FontWeight.w800)))),
+        ],
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            children: [
+              Expanded(
+                child: ListView(
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _BubbleAvatar(seed: initial, colorIndex: 4, radius: 18),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              TextField(controller: _ctrl, autofocus: true, maxLines: null,
+                                style: const TextStyle(fontSize: 16, color: BT.textPrimary, height: 1.4),
+                                decoration: const InputDecoration(hintText: 'Add a comment...', hintStyle: TextStyle(color: BT.textTertiary, fontSize: 16), border: InputBorder.none, isDense: true)),
+                              const SizedBox(height: 16),
+                              
+                              if (_imagesBytes.isNotEmpty) ...[
+                                SizedBox(
+                                  height: 90, 
+                                  child: ListView.separated(
+                                    scrollDirection: Axis.horizontal,
+                                    itemCount: _imagesBytes.length,
+                                    separatorBuilder: (_, __) => const SizedBox(width: 8),
+                                    itemBuilder: (context, index) => Stack(children: [
+                                      ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.memory(_imagesBytes[index], width: 90, height: 90, fit: BoxFit.cover)),
+                                      Positioned(top: 4, right: 4, child: GestureDetector(
+                                        onTap: () => setState(() => _imagesBytes.removeAt(index)),
+                                        child: Container(padding: const EdgeInsets.all(4), decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle), child: const Icon(Icons.close, color: Colors.white, size: 14)))),
+                                    ])),
+                                ),
+                                const SizedBox(height: 16),
+                              ],
+
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(color: BT.card, borderRadius: BorderRadius.circular(16), border: Border.all(color: BT.divider, width: 1.5)),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(children: [
+                                        _BubbleAvatar(seed: origSeed ?? 'X', colorIndex: origColor ?? 0, radius: 11),
+                                        const SizedBox(width: 8),
+                                        Text(origAuthor ?? '', style: const TextStyle(fontWeight: FontWeight.w800, color: BT.textPrimary, fontSize: 13.5)),
+                                        const SizedBox(width: 4),
+                                        const Text('·', style: TextStyle(color: BT.textTertiary, fontSize: 13)),
+                                        const SizedBox(width: 4),
+                                        Expanded(child: Text(origTime ?? '', style: const TextStyle(color: BT.textTertiary, fontSize: 12), overflow: TextOverflow.ellipsis)),
+                                      ]),
+                                    if ((origText ?? '').isNotEmpty)
+                                      Padding(padding: const EdgeInsets.only(top: 8),
+                                        child: Text(origText!, style: const TextStyle(fontSize: 14, color: BT.textPrimary, height: 1.4), maxLines: 4, overflow: TextOverflow.ellipsis)),
+                                    
+                                    if (origImages.isNotEmpty)
+                                      Padding(padding: const EdgeInsets.only(top: 8),
+                                        child: ImageCarousel(imageUrls: origImages, height: 140, onImageTap: (_) {})), 
+
+                                    if (origMusic != null)
+                                      Padding(padding: const EdgeInsets.only(top: 8),
+                                        child: MusicAttachmentCard(track: origMusic)),
+                                  ]),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              
+              Container(
+                padding: const EdgeInsets.only(top: 10),
+                decoration: const BoxDecoration(border: Border(top: BorderSide(color: BT.divider, width: 1))),
+                child: Row(children: [
+                    GestureDetector(
+                      onTap: _pickImages,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(color: _imagesBytes.isNotEmpty ? BT.pastelBlue.withOpacity(0.1) : BT.bg, borderRadius: BorderRadius.circular(20), border: Border.all(color: _imagesBytes.isNotEmpty ? BT.pastelBlue.withOpacity(0.4) : BT.divider, width: 1.5)),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(Icons.image_outlined, color: _imagesBytes.isNotEmpty ? const Color(0xFF6AAED6) : BT.textTertiary, size: 15),
+                          const SizedBox(width: 5),
+                          Text(_imagesBytes.isEmpty ? 'Image' : '${_imagesBytes.length} / 4 ✓', 
+                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _imagesBytes.isNotEmpty ? const Color(0xFF6AAED6) : BT.textTertiary)),
+                        ]))),
+                  ]),
+              )
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1387,13 +2222,38 @@ class _ComposeSheetState extends State<_ComposeSheet> {
   MoodTag _mood = MoodTag.none;
   MusicTrack? _music;
   final _ctrl = TextEditingController();
+  
+  List<Uint8List> _imagesBytes = [];
   bool _isPosting = false; 
 
   @override
   void dispose() { _ctrl.dispose(); super.dispose(); }
 
+  Future<void> _pickImages() async {
+    final picker = ImagePicker();
+    final pickedFiles = await picker.pickMultiImage();
+    
+    if (pickedFiles.isNotEmpty) {
+      List<Uint8List> newBytes = [];
+      
+      int remainingSlots = 4 - _imagesBytes.length;
+      if (remainingSlots <= 0) return; 
+
+      int takeCount = math.min(pickedFiles.length, remainingSlots);
+      
+      for (int i = 0; i < takeCount; i++) {
+        final bytes = await pickedFiles[i].readAsBytes();
+        newBytes.add(bytes);
+      }
+
+      setState(() {
+        _imagesBytes.addAll(newBytes);
+      });
+    }
+  }
+
   Future<void> _submitPost() async {
-    if (_ctrl.text.isEmpty && _music == null) return;
+    if (_ctrl.text.isEmpty && _music == null && _imagesBytes.isEmpty) return;
 
     setState(() => _isPosting = true);
 
@@ -1404,6 +2264,16 @@ class _ComposeSheetState extends State<_ComposeSheet> {
     final initial = name.replaceAll('@', '').substring(0, 1).toUpperCase();
 
     try {
+      List<String> imageUrls = [];
+      
+      for (var bytes in _imagesBytes) {
+        String fileName = 'bubbles/${DateTime.now().millisecondsSinceEpoch}_${_imagesBytes.indexOf(bytes)}.jpg';
+        Reference ref = FirebaseStorage.instance.ref().child(fileName);
+        await ref.putData(bytes);
+        String url = await ref.getDownloadURL();
+        imageUrls.add(url);
+      }
+
       await FirebaseFirestore.instance.collection('posts').add({
         'author': name,
         'avatarSeed': initial,
@@ -1416,6 +2286,7 @@ class _ComposeSheetState extends State<_ComposeSheet> {
         'createdAt': FieldValue.serverTimestamp(), 
         'displayTime': 'Just now',
         'music': _music?.toMap(),
+        'imageUrls': imageUrls, 
       });
 
       if (!mounted) return;
@@ -1437,21 +2308,14 @@ class _ComposeSheetState extends State<_ComposeSheet> {
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
             Row(children: [
               Container(width: 3.5, height: 22,
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [BT.pastelPink, BT.pastelPurple]),
-                  borderRadius: BorderRadius.circular(2))),
+                decoration: BoxDecoration(gradient: const LinearGradient(colors: [BT.pastelPink, BT.pastelPurple]), borderRadius: BorderRadius.circular(2))),
               const SizedBox(width: 10),
               const Text('New Rant', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: BT.textPrimary)),
             ]),
             Container(
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(colors: [BT.pastelPink, BT.pastelPurple]),
-                borderRadius: BorderRadius.circular(30)),
-              child: TextButton(
-                onPressed: _isPosting ? null : _submitPost, 
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 9),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30))),
+              decoration: BoxDecoration(gradient: const LinearGradient(colors: [BT.pastelPink, BT.pastelPurple]), borderRadius: BorderRadius.circular(30)),
+              child: TextButton(onPressed: _isPosting ? null : _submitPost, 
+                style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 9), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30))),
                 child: _isPosting 
                   ? const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                   : const Text('Post', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13)))),
@@ -1459,61 +2323,72 @@ class _ComposeSheetState extends State<_ComposeSheet> {
           const SizedBox(height: 16),
           TextField(controller: _ctrl, autofocus: true, maxLines: 4, maxLength: 280,
             style: const TextStyle(fontSize: 15, color: BT.textPrimary, height: 1.5),
-            decoration: InputDecoration(
-              hintText: "what's going on?? ✦",
-              hintStyle: TextStyle(color: BT.textTertiary.withOpacity(0.8), fontSize: 15),
-              border: InputBorder.none,
-              counterStyle: const TextStyle(color: BT.textTertiary, fontSize: 11))),
+            decoration: InputDecoration(hintText: "what's going on?? ✦", hintStyle: TextStyle(color: BT.textTertiary.withOpacity(0.8), fontSize: 15), border: InputBorder.none, counterStyle: const TextStyle(color: BT.textTertiary, fontSize: 11))),
+              
+          if (_imagesBytes.isNotEmpty) ...[
+            SizedBox(
+              height: 110, 
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: _imagesBytes.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 10),
+                itemBuilder: (context, index) => Stack(children: [
+                  ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.memory(_imagesBytes[index], width: 110, height: 110, fit: BoxFit.cover)),
+                  Positioned(top: 6, right: 6, child: GestureDetector(
+                    onTap: () => setState(() => _imagesBytes.removeAt(index)),
+                    child: Container(padding: const EdgeInsets.all(5), decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle), child: const Icon(Icons.close, color: Colors.white, size: 16)))),
+                ])),
+            ),
+            const SizedBox(height: 12),
+          ],
+              
           if (_music != null) ...[
             MusicAttachmentCard(track: _music!),
             const SizedBox(height: 6),
             GestureDetector(onTap: () => setState(() => _music = null),
-              child: const Text('Remove', style: TextStyle(color: BT.textTertiary, fontSize: 11.5,
-                decoration: TextDecoration.underline))),
+              child: const Text('Remove', style: TextStyle(color: BT.textTertiary, fontSize: 11.5, decoration: TextDecoration.underline))),
             const SizedBox(height: 10),
           ],
           Row(children: [
             Expanded(child: SingleChildScrollView(scrollDirection: Axis.horizontal,
               child: Row(children: [
-                const Text('MOOD  ', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11,
-                  color: BT.textTertiary, letterSpacing: 0.8)),
+                const Text('MOOD  ', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11, color: BT.textTertiary, letterSpacing: 0.8)),
                 ...MoodTag.values.where((m) => m != MoodTag.none).map((m) {
                   final active = _mood == m;
                   return GestureDetector(
                     onTap: () => setState(() => _mood = active ? MoodTag.none : m),
-                    child: AnimatedContainer(duration: const Duration(milliseconds: 150),
-                      margin: const EdgeInsets.only(right: 6),
-                      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: active ? m.bg : BT.bg,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: active ? m.fg.withOpacity(0.5) : BT.divider, width: 1.5)),
-                      child: Text(m.label, style: TextStyle(fontSize: 11.5,
-                        fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                        color: active ? m.fg : BT.textSecondary))));
+                    child: AnimatedContainer(duration: const Duration(milliseconds: 150), margin: const EdgeInsets.only(right: 6), padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6), decoration: BoxDecoration(color: active ? m.bg : BT.bg, borderRadius: BorderRadius.circular(20), border: Border.all(color: active ? m.fg.withOpacity(0.5) : BT.divider, width: 1.5)),
+                      child: Text(m.label, style: TextStyle(fontSize: 11.5, fontWeight: active ? FontWeight.w700 : FontWeight.w500, color: active ? m.fg : BT.textSecondary))));
                 }),
               ]))),
             const SizedBox(width: 10),
+            
+            GestureDetector(
+              onTap: _pickImages,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(color: _imagesBytes.isNotEmpty ? BT.pastelBlue.withOpacity(0.1) : BT.bg, borderRadius: BorderRadius.circular(20), border: Border.all(color: _imagesBytes.isNotEmpty ? BT.pastelBlue.withOpacity(0.4) : BT.divider, width: 1.5)),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.image_outlined, color: _imagesBytes.isNotEmpty ? const Color(0xFF6AAED6) : BT.textTertiary, size: 15),
+                  const SizedBox(width: 5),
+                  Text(_imagesBytes.isEmpty ? 'Image' : '${_imagesBytes.length} / 4 ✓', 
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _imagesBytes.isNotEmpty ? const Color(0xFF6AAED6) : BT.textTertiary)),
+                ]))),
+                
+            const SizedBox(width: 10),
+            
             GestureDetector(
               onTap: () {
-                showModalBottomSheet(context: context, isScrollControlled: true,
-                  backgroundColor: Colors.white,
-                  shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+                showModalBottomSheet(context: context, isScrollControlled: true, backgroundColor: Colors.white, shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
                   builder: (_) => _MusicPickerSheet(onSelect: (t) { setState(() => _music = t); Navigator.pop(context); }));
               },
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: _music != null ? BT.spotify.withOpacity(0.1) : BT.bg,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: _music != null ? BT.spotify.withOpacity(0.4) : BT.divider, width: 1.5)),
+                decoration: BoxDecoration(color: _music != null ? BT.spotify.withOpacity(0.1) : BT.bg, borderRadius: BorderRadius.circular(20), border: Border.all(color: _music != null ? BT.spotify.withOpacity(0.4) : BT.divider, width: 1.5)),
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.music_note_rounded,
-                    color: _music != null ? BT.spotify : BT.textTertiary, size: 15),
+                  Icon(Icons.music_note_rounded, color: _music != null ? BT.spotify : BT.textTertiary, size: 15),
                   const SizedBox(width: 5),
-                  Text(_music != null ? 'Music ✓' : 'Music',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
-                      color: _music != null ? BT.spotify : BT.textTertiary)),
+                  Text(_music != null ? 'Music ✓' : 'Music', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _music != null ? BT.spotify : BT.textTertiary)),
                 ]))),
           ]),
         ]),
