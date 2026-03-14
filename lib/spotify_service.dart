@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'home_screen.dart';
+import 'models/post.dart';
 
 class SpotifyService {
   static const String _clientId     = '1b53bd35f56f45d4b4ea1cc0757b86d1';
