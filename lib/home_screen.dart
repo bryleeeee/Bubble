@@ -299,9 +299,8 @@ class BubbleTailClipper extends CustomClipper<Path> {
   bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
 }
 
-
 // ============================================================================
-// NEW: INSTAGRAM-STYLE IMAGE CAROUSEL
+// INSTAGRAM-STYLE IMAGE CAROUSEL
 // ============================================================================
 class ImageCarousel extends StatefulWidget {
   final List<String> imageUrls;
@@ -334,13 +333,12 @@ class _ImageCarouselState extends State<ImageCarousel> {
           child: SizedBox(
             height: widget.height,
             width: double.infinity,
-            // --- FIX: ScrollConfiguration allows MOUSE DRAGGING on Web! ---
             child: ScrollConfiguration(
               behavior: ScrollConfiguration.of(context).copyWith(
                 dragDevices: {
                   PointerDeviceKind.touch,
-                  PointerDeviceKind.mouse,     // Enables clicking and dragging with a mouse!
-                  PointerDeviceKind.trackpad,  // Enables two-finger swiping on laptops!
+                  PointerDeviceKind.mouse,     
+                  PointerDeviceKind.trackpad,  
                 },
               ),
               child: PageView.builder(
@@ -366,7 +364,6 @@ class _ImageCarouselState extends State<ImageCarousel> {
           ),
         ),
         
-        // --- THE DYNAMIC PILL INDICATORS ---
         if (widget.imageUrls.length > 1)
           Padding(
             padding: const EdgeInsets.only(top: 10.0),
@@ -378,7 +375,7 @@ class _ImageCarouselState extends State<ImageCarousel> {
                   duration: const Duration(milliseconds: 200),
                   margin: const EdgeInsets.symmetric(horizontal: 3.0),
                   height: 6.0,
-                  width: isActive ? 18.0 : 6.0, // Stretches into a pill when active
+                  width: isActive ? 18.0 : 6.0, 
                   decoration: BoxDecoration(
                     color: isActive ? BT.pastelPurple : BT.divider,
                     borderRadius: BorderRadius.circular(3),
@@ -970,7 +967,6 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
                   border: InputBorder.none,
                   counterStyle: TextStyle(color: BT.textTertiary, fontSize: 11))),
               
-              // --- LIVE MULTI-IMAGE PREVIEW IN EDIT ---
               if (existingImageUrls.isNotEmpty || newImageBytes.isNotEmpty) ...[
                 SizedBox(
                   height: 110,
@@ -1129,16 +1125,28 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
           widget.onCardTap(); 
         }
       },
-      child: AnimatedCrossFade(
-        duration: const Duration(milliseconds: 320),
-        crossFadeState: widget.isPopped ? CrossFadeState.showSecond : CrossFadeState.showFirst,
-        firstChild: ClipPath(
-          clipper: BubbleTailClipper(borderRadius: 28),
-          child: _buildBubble(),
+      child: AnimatedSize(
+        duration: const Duration(milliseconds: 600), 
+        curve: Curves.easeOutBack, 
+        alignment: Alignment.topCenter,
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 250),
+          transitionBuilder: (child, animation) => FadeTransition(opacity: animation, child: child),
+          child: widget.isPopped
+              ? Container(
+                  key: const ValueKey('popped_card'), 
+                  child: widget.post.isRepost 
+                      ? (widget.post.text.isEmpty ? _buildStraightRepostCard() : _buildQuoteRepostCard()) 
+                      : _buildNormalCard(),
+                )
+              : Container(
+                  key: const ValueKey('unpopped_bubble'),
+                  child: ClipPath(
+                    clipper: BubbleTailClipper(borderRadius: 28),
+                    child: _buildBubble(),
+                  ),
+                ),
         ),
-        secondChild: widget.post.isRepost 
-            ? (widget.post.text.isEmpty ? _buildStraightRepostCard() : _buildQuoteRepostCard()) 
-            : _buildNormalCard(),
       ),
     );
   }
@@ -1193,10 +1201,10 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
         shadows: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 12, offset: const Offset(0, 3))],
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // --- FIX: TEXT OVERFLOW FULLY PREVENTED HERE ---
         _buildCardHeader(p.author, p.avatarSeed, p.avatarColorIndex, p.timestamp, p.mood),
         _buildCardText(p.text),
         
-        // NOW USING THE SLIDING CAROUSEL
         if (p.imageUrls.isNotEmpty) Padding(
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
           child: ImageCarousel(imageUrls: p.imageUrls, onImageTap: _openViewer)),
@@ -1233,6 +1241,7 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
             ],
           ),
         ),
+        // --- FIX: TEXT OVERFLOW FULLY PREVENTED HERE ---
         _buildCardHeader(p.originalAuthor ?? '', p.originalAvatarSeed ?? 'X', p.originalAvatarColorIndex, p.originalTimestamp ?? '', p.mood, topPadding: 4),
         _buildCardText(p.originalText ?? ''),
         
@@ -1263,6 +1272,7 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
         shadows: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 12, offset: const Offset(0, 3))],
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // --- FIX: TEXT OVERFLOW FULLY PREVENTED HERE ---
         _buildCardHeader(p.author, p.avatarSeed, p.avatarColorIndex, p.timestamp, p.mood),
         _buildCardText(p.text), 
         
@@ -1291,11 +1301,12 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
                         children: [
                           _BubbleAvatar(seed: p.originalAvatarSeed ?? 'X', colorIndex: p.originalAvatarColorIndex, radius: 11),
                           const SizedBox(width: 8),
-                          Text(p.originalAuthor ?? '', style: const TextStyle(fontWeight: FontWeight.w800, color: BT.textPrimary, fontSize: 13.5)),
+                          // --- FIX: TEXT OVERFLOW FULLY PREVENTED IN INNER QUOTE ---
+                          Flexible(child: Text(p.originalAuthor ?? '', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, color: BT.textPrimary, fontSize: 13.5))),
                           const SizedBox(width: 4),
                           const Text('·', style: TextStyle(color: BT.textTertiary, fontSize: 13)),
                           const SizedBox(width: 4),
-                          Expanded(child: Text(p.originalTimestamp ?? '', style: const TextStyle(color: BT.textTertiary, fontSize: 12), overflow: TextOverflow.ellipsis)),
+                          Flexible(child: Text(p.originalTimestamp ?? '', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: BT.textTertiary, fontSize: 12))),
                         ]
                       )
                     ),
@@ -1328,6 +1339,7 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
     );
   }
 
+  // --- UPDATED METHOD: Uses Flexible wrappers to stop overflow errors forever ---
   Widget _buildCardHeader(String author, String seed, int colorIdx, String time, MoodTag mood, {double topPadding = 14}) {
     return Padding(
       padding: EdgeInsets.fromLTRB(14, topPadding, 14, 8),
@@ -1335,11 +1347,11 @@ class _RantCardState extends State<RantCard> with SingleTickerProviderStateMixin
         _BubbleAvatar(seed: seed, colorIndex: colorIdx, radius: 18),
         const SizedBox(width: 10),
         Expanded(child: Row(children: [
-          Text(author, style: const TextStyle(fontWeight: FontWeight.w800, color: BT.textPrimary, fontSize: 13.5)),
-          const SizedBox(width: 5),
+          Flexible(child: Text(author, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, color: BT.textPrimary, fontSize: 13.5))),
+          const SizedBox(width: 4),
           const Text('·', style: TextStyle(color: BT.textTertiary, fontSize: 14, fontWeight: FontWeight.w600)),
-          const SizedBox(width: 5),
-          Text(time, style: const TextStyle(color: BT.textTertiary, fontSize: 12)),
+          const SizedBox(width: 4),
+          Flexible(child: Text(time, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: BT.textTertiary, fontSize: 12))),
         ])),
         if (mood != MoodTag.none) ...[_MoodPill(mood: mood), const SizedBox(width: 6)],
         GestureDetector(
@@ -1861,12 +1873,13 @@ class _ThreadScreenState extends State<ThreadScreen> {
           ),
           const SizedBox(width: 10),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            // --- FIX: TEXT OVERFLOW FULLY PREVENTED IN REPLIES ---
             Row(children: [
-              Text(data['author'] ?? 'Unknown', style: const TextStyle(fontWeight: FontWeight.w800, color: BT.textPrimary, fontSize: 13)),
-              const SizedBox(width: 5),
+              Flexible(child: Text(data['author'] ?? 'Unknown', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, color: BT.textPrimary, fontSize: 13))),
+              const SizedBox(width: 4),
               const Text('·', style: TextStyle(color: BT.textTertiary)),
-              const SizedBox(width: 5),
-              Text(formattedTime, style: const TextStyle(color: BT.textTertiary, fontSize: 11.5)),
+              const SizedBox(width: 4),
+              Flexible(child: Text(formattedTime, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: BT.textTertiary, fontSize: 11.5))),
               const Spacer(),
               if (isMyComment)
                 GestureDetector(
@@ -2093,19 +2106,30 @@ class _QuoteComposeScreenState extends State<QuoteComposeScreen> {
     return Scaffold(
       backgroundColor: BT.bg,
       appBar: AppBar(
-        backgroundColor: BT.bg, elevation: 0, surfaceTintColor: Colors.transparent,
+        backgroundColor: BT.bg,
+        elevation: 0,
+        surfaceTintColor: Colors.transparent,
         leadingWidth: 80,
-        leading: TextButton(onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel', style: TextStyle(color: BT.textPrimary, fontSize: 16))),
+        leading: TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel', style: TextStyle(color: BT.textPrimary, fontSize: 16)),
+        ),
         actions: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             child: ElevatedButton(
               onPressed: _isPosting ? null : _submitQuote,
-              style: ElevatedButton.styleFrom(backgroundColor: BT.pastelPurple, foregroundColor: Colors.white, elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20))),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: BT.pastelPurple,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              ),
               child: _isPosting 
                   ? const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                  : const Text('Post', style: TextStyle(fontWeight: FontWeight.w800)))),
+                  : const Text('Post', style: TextStyle(fontWeight: FontWeight.w800)),
+            ),
+          )
         ],
       ),
       body: SafeArea(
@@ -2125,9 +2149,18 @@ class _QuoteComposeScreenState extends State<QuoteComposeScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              TextField(controller: _ctrl, autofocus: true, maxLines: null,
+                              TextField(
+                                controller: _ctrl,
+                                autofocus: true,
+                                maxLines: null,
                                 style: const TextStyle(fontSize: 16, color: BT.textPrimary, height: 1.4),
-                                decoration: const InputDecoration(hintText: 'Add a comment...', hintStyle: TextStyle(color: BT.textTertiary, fontSize: 16), border: InputBorder.none, isDense: true)),
+                                decoration: const InputDecoration(
+                                  hintText: 'Add a comment...',
+                                  hintStyle: TextStyle(color: BT.textTertiary, fontSize: 16),
+                                  border: InputBorder.none,
+                                  isDense: true,
+                                ),
+                              ),
                               const SizedBox(height: 16),
                               
                               if (_imagesBytes.isNotEmpty) ...[
@@ -2149,31 +2182,44 @@ class _QuoteComposeScreenState extends State<QuoteComposeScreen> {
 
                               Container(
                                 padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(color: BT.card, borderRadius: BorderRadius.circular(16), border: Border.all(color: BT.divider, width: 1.5)),
+                                decoration: BoxDecoration(
+                                  color: BT.card,
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(color: BT.divider, width: 1.5),
+                                ),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Row(children: [
+                                    // --- FIX: TEXT OVERFLOW FULLY PREVENTED IN QUOTE COMPOSE ---
+                                    Row(
+                                      children: [
                                         _BubbleAvatar(seed: origSeed ?? 'X', colorIndex: origColor ?? 0, radius: 11),
                                         const SizedBox(width: 8),
-                                        Text(origAuthor ?? '', style: const TextStyle(fontWeight: FontWeight.w800, color: BT.textPrimary, fontSize: 13.5)),
+                                        Flexible(child: Text(origAuthor ?? '', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, color: BT.textPrimary, fontSize: 13.5))),
                                         const SizedBox(width: 4),
                                         const Text('·', style: TextStyle(color: BT.textTertiary, fontSize: 13)),
                                         const SizedBox(width: 4),
-                                        Expanded(child: Text(origTime ?? '', style: const TextStyle(color: BT.textTertiary, fontSize: 12), overflow: TextOverflow.ellipsis)),
-                                      ]),
+                                        Flexible(child: Text(origTime ?? '', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: BT.textTertiary, fontSize: 12))),
+                                      ]
+                                    ),
                                     if ((origText ?? '').isNotEmpty)
-                                      Padding(padding: const EdgeInsets.only(top: 8),
-                                        child: Text(origText!, style: const TextStyle(fontSize: 14, color: BT.textPrimary, height: 1.4), maxLines: 4, overflow: TextOverflow.ellipsis)),
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 8),
+                                        child: Text(origText!, style: const TextStyle(fontSize: 14, color: BT.textPrimary, height: 1.4), maxLines: 4, overflow: TextOverflow.ellipsis),
+                                      ),
                                     
                                     if (origImages.isNotEmpty)
-                                      Padding(padding: const EdgeInsets.only(top: 8),
-                                        child: ImageCarousel(imageUrls: origImages, height: 140, onImageTap: (_) {})), 
-
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 8),
+                                        child: ImageCarousel(imageUrls: origImages, height: 140, onImageTap: (_) {}), 
+                                      ),
                                     if (origMusic != null)
-                                      Padding(padding: const EdgeInsets.only(top: 8),
-                                        child: MusicAttachmentCard(track: origMusic)),
-                                  ]),
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 8),
+                                        child: MusicAttachmentCard(track: origMusic),
+                                      ),
+                                  ]
+                                ),
                               ),
                             ],
                           ),
@@ -2186,20 +2232,29 @@ class _QuoteComposeScreenState extends State<QuoteComposeScreen> {
               
               Container(
                 padding: const EdgeInsets.only(top: 10),
-                decoration: const BoxDecoration(border: Border(top: BorderSide(color: BT.divider, width: 1))),
-                child: Row(children: [
+                decoration: const BoxDecoration(
+                  border: Border(top: BorderSide(color: BT.divider, width: 1))
+                ),
+                child: Row(
+                  children: [
                     GestureDetector(
                       onTap: _pickImages,
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        decoration: BoxDecoration(color: _imagesBytes.isNotEmpty ? BT.pastelBlue.withOpacity(0.1) : BT.bg, borderRadius: BorderRadius.circular(20), border: Border.all(color: _imagesBytes.isNotEmpty ? BT.pastelBlue.withOpacity(0.4) : BT.divider, width: 1.5)),
+                        decoration: BoxDecoration(
+                          color: _imagesBytes.isNotEmpty ? BT.pastelBlue.withOpacity(0.1) : BT.bg,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: _imagesBytes.isNotEmpty ? BT.pastelBlue.withOpacity(0.4) : BT.divider, width: 1.5)),
                         child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          Icon(Icons.image_outlined, color: _imagesBytes.isNotEmpty ? const Color(0xFF6AAED6) : BT.textTertiary, size: 15),
+                          Icon(Icons.image_outlined,
+                            color: _imagesBytes.isNotEmpty ? const Color(0xFF6AAED6) : BT.textTertiary, size: 15),
                           const SizedBox(width: 5),
                           Text(_imagesBytes.isEmpty ? 'Image' : '${_imagesBytes.length} / 4 ✓', 
-                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _imagesBytes.isNotEmpty ? const Color(0xFF6AAED6) : BT.textTertiary)),
+                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                              color: _imagesBytes.isNotEmpty ? const Color(0xFF6AAED6) : BT.textTertiary)),
                         ]))),
-                  ]),
+                  ],
+                ),
               )
             ],
           ),
