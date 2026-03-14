@@ -17,7 +17,7 @@ class _SplashScreenState extends State<SplashScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // NEW: Gets the exact dimensions of whatever device this is running on
+    // Dynamically gets the exact screen dimensions of the current device
     final size = MediaQuery.of(context).size;
 
     return GestureDetector( 
@@ -33,7 +33,7 @@ class _SplashScreenState extends State<SplashScreen> {
           height: size.height,
           child: Stack(
             children: [
-              // --- RESPONSIVE BUBBLES (Uses percentages so it never leaves deadspace) ---
+              // --- RESPONSIVE BUBBLES (Uses percentages of the screen) ---
               Positioned(
                 top: size.height * -0.1, 
                 left: size.width * -0.3, 
