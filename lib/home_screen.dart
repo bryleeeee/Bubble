@@ -10,6 +10,7 @@ import '../models/post.dart';
 import '../widgets/bubble_components.dart';
 import '../widgets/compose_sheet.dart';
 import '../widgets/rant_card.dart';
+import '../widgets/circle_sheet.dart';
 import 'login.dart';
 import 'screens/profile_screen.dart';
 import 'screens/thread_screen.dart';
@@ -26,7 +27,12 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _navIndex = 0;
-  String _circle = 'Nom';
+  
+  // ── Dynamic Circle State ──
+  String? _circle; 
+  bool _isLoadingCircles = true;
+  StreamSubscription<QuerySnapshot>? _circleSub;
+
   final String _bubbleAsset = 'assets/images/image_0.png';
   final Set<String> _poppedPostIds = {};
 
@@ -42,10 +48,34 @@ class _HomeScreenState extends State<HomeScreen> {
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.dark,
     ));
+
+    // ── Live Circle Listener (The Gatekeeper) ──
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) {
+      _circleSub = FirebaseFirestore.instance
+          .collection('circles')
+          .where('members', arrayContains: uid)
+          .snapshots()
+          .listen((snap) {
+        if (!mounted) return;
+        
+        if (snap.docs.isEmpty) {
+          setState(() { _circle = null; _isLoadingCircles = false; });
+        } else {
+          final validNames = snap.docs.map((d) => d['name'] as String).toList();
+          if (_circle == null || !validNames.contains(_circle)) {
+            setState(() { _circle = validNames.first; _isLoadingCircles = false; });
+          } else {
+            setState(() => _isLoadingCircles = false);
+          }
+        }
+      });
+    }
   }
 
   @override
   void dispose() {
+    _circleSub?.cancel();
     _refreshTrigger.close();
     super.dispose();
   }
@@ -58,6 +88,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _handleRefresh() async {
+    if (_circle == null) return; 
     HapticFeedback.mediumImpact();
     _refreshTrigger.add(null);
     setState(() => _lastSeenCount = _currentFeedCount);
@@ -65,14 +96,13 @@ class _HomeScreenState extends State<HomeScreen> {
     HapticFeedback.lightImpact();
   }
 
-  // ── Clean, emoji-free greeting ──
   String get _greeting {
     final hour = DateTime.now().hour;
     if (hour < 5)  return 'Still up,';
-    if (hour < 12) return 'Good morning,';
-    if (hour < 17) return 'Good afternoon,';
-    if (hour < 21) return 'Good evening,';
-    return 'Good night,';
+    if (hour < 12) return 'Good morning!,';
+    if (hour < 17) return 'Good afternoon!,';
+    if (hour < 23) return 'Good evening!,';
+    return 'Good evening!,';
   }
 
   @override
@@ -100,7 +130,6 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               Column(children: [
                 _buildFrostedHeader(),
-                // Gradient divider separating header from feed
                 Container(
                   height: 1.5,
                   decoration: BoxDecoration(
@@ -113,9 +142,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       ],
                       stops: const [0.0, 0.35, 0.65, 1.0])),
                 ),
-                Expanded(child: _buildLiveFeed(authorFilter: null)),
+                _buildMainContent(),
               ]),
-              const ProfileScreen(),
+              ProfileScreen(targetCircle: _circle ?? ''),
             ],
           ),
         ),
@@ -124,7 +153,72 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // ── FROSTED GLASS HEADER CARD (Scattered Bubbles & Centered Info) ────────
+  Widget _buildMainContent() {
+    if (_isLoadingCircles) {
+      return const Expanded(child: Center(child: CircularProgressIndicator(color: BT.pastelPurple)));
+    }
+    
+    if (_circle == null) {
+      return Expanded(
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Text('🫧', style: TextStyle(fontSize: 64)),
+              const SizedBox(height: 16),
+              const Text('Welcome to Bubble!', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: BT.textPrimary)),
+              const SizedBox(height: 8),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 40),
+                child: Text(
+                  'Bubble is a private space.\nYou need to join or create a Circle to start posting.', 
+                  textAlign: TextAlign.center, 
+                  style: TextStyle(color: BT.textSecondary, fontSize: 14, height: 1.5)
+                ),
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: () => showModalBottomSheet(
+                  context: context,
+                  backgroundColor: Colors.white,
+                  shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+                  builder: (_) => CircleSheet(current: '', onSelect: (c) {}) 
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: BT.pastelPurple, 
+                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12), 
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30))
+                ),
+                child: const Text('Join or Create a Circle', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
+              )
+            ],
+          ),
+        ),
+      );
+    }
+
+    // ── DYNAMIC BADGE LOGIC ──
+    final unreadCount = (_currentFeedCount - _lastSeenCount).clamp(0, 999);
+    final hasUnread = unreadCount > 0;
+
+    return Expanded(
+      child: Stack(
+        alignment: Alignment.topCenter,
+        children: [
+          // Feed now knows if it needs to make room for the badge!
+          _buildLiveFeed(authorFilter: null, hasUnread: hasUnread),
+          
+          _UnreadBadge(
+            unreadCount: unreadCount,
+            onTap: () {
+              setState(() => _lastSeenCount = _currentFeedCount);
+            },
+          ),
+        ],
+      )
+    );
+  }
+
   Widget _buildFrostedHeader() {
     final user = FirebaseAuth.instance.currentUser;
     final fallbackInitial = user?.displayName?.isNotEmpty == true
@@ -170,10 +264,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
                 return Stack(
                   children: [
-                    // Scattered background bubbles covering the entire header
                     const Positioned.fill(child: _FloatingBubbleStrip()),
-
-                    // Foreground UI Content
                     Padding(
                       padding: const EdgeInsets.fromLTRB(18, 18, 18, 12),
                       child: Column(
@@ -182,9 +273,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              // ── LEFT: Avatar ──
                               SizedBox(
-                                width: 48, // Fixed width prevents the center from shifting
+                                width: 48,
                                 child: Align(
                                   alignment: Alignment.topLeft,
                                   child: GestureDetector(
@@ -206,8 +296,6 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                 ),
                               ),
-                              
-                              // ── CENTER: Logo, Greeting & Circle Selector ──
                               Expanded(
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
@@ -242,8 +330,6 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ],
                                 ),
                               ),
-
-                              // ── RIGHT: Notification Bell ──
                               const SizedBox(
                                 width: 48,
                                 child: Align(
@@ -252,12 +338,6 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                               ),
                             ],
-                          ),
-
-                          // ── Unread posts badge ──
-                          _UnreadBadge(
-                            unreadCount: (_currentFeedCount - _lastSeenCount).clamp(0, 999),
-                            onTap: () => setState(() => _lastSeenCount = _currentFeedCount),
                           ),
                         ],
                       ),
@@ -272,7 +352,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // ── CIRCLE SELECTOR BUTTON ──────────────────────────────────────────────────
   Widget _buildCircleButton() {
     return GestureDetector(
       onTap: () => showModalBottomSheet(
@@ -280,7 +359,7 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: Colors.white,
         shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
         builder: (_) => CircleSheet(
-            current: _circle,
+            current: _circle ?? '',
             onSelect: (c) => setState(() => _circle = c))),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -289,18 +368,21 @@ class _HomeScreenState extends State<HomeScreen> {
           borderRadius: BorderRadius.circular(30),
           boxShadow: [BoxShadow(color: BT.pastelBlue.withOpacity(0.4), blurRadius: 8, offset: const Offset(0, 3))]),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const _PulsingDot(),
-          const SizedBox(width: 6),
-          Text(_circle, style: const TextStyle(fontWeight: FontWeight.w800, color: Colors.white, fontSize: 13)),
+          if (_circle != null) const _PulsingDot(),
+          if (_circle != null) const SizedBox(width: 6),
+          Text(_circle ?? 'Start Here', style: const TextStyle(fontWeight: FontWeight.w800, color: Colors.white, fontSize: 13)),
           const SizedBox(width: 4),
           const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.white, size: 16),
         ])),
     );
   }
 
-  Widget _buildLiveFeed({String? authorFilter}) {
+  // ── PASS THE UNREAD STATE DOWN TO THE FEED ──
+  Widget _buildLiveFeed({String? authorFilter, required bool hasUnread}) {
     return _RefreshableFeed(
+      targetCircle: _circle!, 
       authorFilter: authorFilter,
+      hasUnreadBadge: hasUnread, // Tells the feed to make room!
       bubbleAsset: _bubbleAsset,
       poppedPostIds: _poppedPostIds,
       onPop: (id) => setState(() => _poppedPostIds.add(id)),
@@ -374,21 +456,24 @@ class _HomeScreenState extends State<HomeScreen> {
                             size: 24))))),
                   ]),
               ))),
-          Positioned(
-            bottom: 24,
-            child: _ComposeButton(onTap: _showComposeSheet)),
+              
+          if (_circle != null)
+            Positioned(
+              bottom: 24,
+              child: _ComposeButton(onTap: _showComposeSheet)),
         ],
       ),
     );
   }
 
   void _showComposeSheet() async {
+    if (_circle == null) return;
     await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
-      builder: (_) => const ComposeSheet());
+      builder: (_) => ComposeSheet(targetCircle: _circle!));
   }
 }
 
@@ -403,7 +488,6 @@ class _FloatingBubbleStrip extends StatefulWidget {
 class _FloatingBubbleStripState extends State<_FloatingBubbleStrip> with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
 
-  // X and Y coordinates (0.0 to 1.0) scatter them across the entire header canvas
   static const _bubbles = [
     (color: BT.pastelPink,   size: 42.0, phaseX: 0.00, phaseY: 0.00, x: 0.15, y: 0.25),
     (color: BT.pastelBlue,   size: 32.0, phaseX: 0.25, phaseY: 0.33, x: 0.55, y: 0.70),
@@ -434,7 +518,6 @@ class _FloatingBubbleStripState extends State<_FloatingBubbleStrip> with SingleT
               clipBehavior: Clip.none,
               children: _bubbles.map((b) {
                 final t = _ctrl.value;
-                // Organic Figure-8 drifting math
                 final dy = math.sin((t + b.phaseY) * math.pi * 2) * 12.0;
                 final dx = math.cos((t + b.phaseX) * math.pi * 2) * 8.0;
 
@@ -567,7 +650,7 @@ class _UnreadBadgeState extends State<_UnreadBadge>
     if (widget.unreadCount == 0) return const SizedBox.shrink();
 
     return Padding(
-      padding: const EdgeInsets.only(top: 12.0),
+      padding: const EdgeInsets.only(top: 16.0), 
       child: FadeTransition(
         opacity: _fade,
         child: SlideTransition(
@@ -575,12 +658,12 @@ class _UnreadBadgeState extends State<_UnreadBadge>
           child: GestureDetector(
             onTap: widget.onTap,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 8),
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   colors: [
-                    BT.pastelPink.withOpacity(0.90),
-                    BT.pastelPurple.withOpacity(0.85),
+                    BT.pastelPink.withOpacity(0.95),
+                    BT.pastelPurple.withOpacity(0.90),
                   ]),
                 borderRadius: BorderRadius.circular(20),
                 boxShadow: [
@@ -590,15 +673,15 @@ class _UnreadBadgeState extends State<_UnreadBadge>
                 ]),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
                 const Icon(Icons.arrow_upward_rounded,
-                    color: Colors.white, size: 13),
-                const SizedBox(width: 5),
+                    color: Colors.white, size: 14),
+                const SizedBox(width: 8), 
                 Text(
                   widget.unreadCount == 1
                       ? '1 new rant'
                       : '${widget.unreadCount} new rants',
                   style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 12,
+                      fontSize: 13,
                       fontWeight: FontWeight.w800)),
               ]),
             ),
@@ -613,7 +696,9 @@ class _UnreadBadgeState extends State<_UnreadBadge>
 // REFRESHABLE FEED WIDGET
 // ============================================================================
 class _RefreshableFeed extends StatefulWidget {
+  final String targetCircle;
   final String? authorFilter;
+  final bool hasUnreadBadge; // ── NEW: Accepts badge state! ──
   final String bubbleAsset;
   final Set<String> poppedPostIds;
   final void Function(String) onPop;
@@ -624,7 +709,9 @@ class _RefreshableFeed extends StatefulWidget {
 
   const _RefreshableFeed({
     Key? key,
+    required this.targetCircle,
     required this.authorFilter,
+    required this.hasUnreadBadge,
     required this.bubbleAsset,
     required this.poppedPostIds,
     required this.onPop,
@@ -654,9 +741,23 @@ class _RefreshableFeedState extends State<_RefreshableFeed>
     });
   }
 
+  @override
+  void didUpdateWidget(covariant _RefreshableFeed oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.targetCircle != widget.targetCircle || oldWidget.authorFilter != widget.authorFilter) {
+      setState(() {
+        _streamKey++;
+        _buildStream();
+      });
+    }
+  }
+
   void _buildStream() {
     Query query = FirebaseFirestore.instance
-        .collection('posts').orderBy('createdAt', descending: true);
+        .collection('posts')
+        .where('circle', isEqualTo: widget.targetCircle) 
+        .orderBy('createdAt', descending: true);
+        
     if (widget.authorFilter != null) {
       query = query.where('author', isEqualTo: widget.authorFilter);
     }
@@ -668,6 +769,11 @@ class _RefreshableFeedState extends State<_RefreshableFeed>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    
+    // ── DYNAMIC PADDING ──
+    // Pushes the list down 64px if the badge is visible, snaps back to 16px if not!
+    final dynamicTopPadding = widget.hasUnreadBadge ? 64.0 : 16.0;
+
     return RefreshIndicator(
       color: BT.pastelPurple,
       backgroundColor: BT.card,
@@ -677,14 +783,28 @@ class _RefreshableFeedState extends State<_RefreshableFeed>
         key: ValueKey(_streamKey),
         stream: _feedStream,
         builder: (context, snapshot) {
-          if (snapshot.hasError) return const Center(
-            child: Text('Error loading feed.',
-                style: TextStyle(color: BT.textTertiary)));
+          
+          if (snapshot.hasError) {
+            final err = snapshot.error.toString();
+            final needsIndex = err.contains('indexes') || err.contains('index');
+            return Center(child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                const Text('⚙️', style: TextStyle(fontSize: 36)),
+                const SizedBox(height: 12),
+                Text(
+                  needsIndex
+                      ? 'Firestore Index needed for this Circle!\nCheck your debug console and click the link to build it.'
+                      : 'Something went wrong loading feed.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: BT.textSecondary, fontSize: 13, height: 1.5)),
+              ])));
+          }
 
           if (snapshot.connectionState == ConnectionState.waiting) {
             return ListView.builder(
-              padding: const EdgeInsets.only(
-                  top: 12, bottom: 130, left: 14, right: 14),
+              padding: EdgeInsets.only(
+                  top: dynamicTopPadding, bottom: 130, left: 14, right: 14),
               itemCount: 4,
               itemBuilder: (_, __) => const SkeletonBubble());
           }
@@ -697,20 +817,22 @@ class _RefreshableFeedState extends State<_RefreshableFeed>
             });
           }
 
-          if (docs.isEmpty) return ListView(children: const [
-            SizedBox(height: 150),
-            Center(child: Text('💬', style: TextStyle(fontSize: 52))),
-            SizedBox(height: 16),
-            Center(child: Text('Nothing here yet.',
-                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17, color: BT.textPrimary))),
-            SizedBox(height: 6),
-            Center(child: Text('Be the first to pop off.',
-                style: TextStyle(color: BT.textSecondary, fontSize: 14))),
+          if (docs.isEmpty) return ListView(
+            padding: EdgeInsets.only(top: dynamicTopPadding),
+            children: const [
+              SizedBox(height: 150),
+              Center(child: Text('💬', style: TextStyle(fontSize: 52))),
+              SizedBox(height: 16),
+              Center(child: Text('Nothing here yet.',
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17, color: BT.textPrimary))),
+              SizedBox(height: 6),
+              Center(child: Text('Be the first to pop off.',
+                  style: TextStyle(color: BT.textSecondary, fontSize: 14))),
           ]);
 
           return ListView.builder(
-            padding: const EdgeInsets.only(
-                top: 12, bottom: 130, left: 14, right: 14),
+            padding: EdgeInsets.only(
+                top: dynamicTopPadding, bottom: 130, left: 14, right: 14),
             itemCount: docs.length,
             itemBuilder: (context, i) {
               final post = Post.fromFirestore(docs[i]);
@@ -725,7 +847,8 @@ class _RefreshableFeedState extends State<_RefreshableFeed>
                     isPopped: isPopped,
                     bubbleAsset: widget.bubbleAsset,
                     onPopAction: () => widget.onPop(post.id),
-                    onCardTap: () => widget.onCardTap(post),
+                    onCardTap: () => Navigator.push(context,
+                        MaterialPageRoute(builder: (_) => ThreadScreen(post: post))),
                   ),
                 ),
               );
@@ -761,7 +884,7 @@ class _HeaderAvatarState extends State<_HeaderAvatar>
     return AnimatedBuilder(
       animation: _ctrl,
       builder: (_, child) => Container(
-        width: 44, height: 44,
+        width: 40, height: 40,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           gradient: SweepGradient(
@@ -780,13 +903,13 @@ class _HeaderAvatarState extends State<_HeaderAvatar>
         child: ClipOval(
           child: widget.profileUrl.isNotEmpty
               ? Image.network(widget.profileUrl,
-                  width: 39, height: 39, fit: BoxFit.cover)
+                  width: 35, height: 35, fit: BoxFit.cover)
               : Container(
-                  width: 39, height: 39,
+                  width: 35, height: 35,
                   color: BT.pastelPurple,
                   child: Center(child: Text(widget.initial,
                     style: const TextStyle(
-                        fontSize: 16,
+                        fontSize: 15,
                         color: Colors.white,
                         fontWeight: FontWeight.w900)))))),
     );

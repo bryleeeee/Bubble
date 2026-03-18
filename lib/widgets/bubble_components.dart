@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/post.dart';
+import 'ghost_widgets.dart'; // ── NEW: Tells the file where to find the Ghost bubbles! ──
+
 
 // ============================================================================
 // BUBBLE TAIL SHAPE
@@ -623,62 +625,7 @@ class Sparkle extends StatelessWidget {
   }
 }
 
-class CircleSheet extends StatelessWidget {
-  final String current;
-  final void Function(String) onSelect;
-  const CircleSheet({Key? key, required this.current, required this.onSelect}) : super(key: key);
 
-  @override
-  Widget build(BuildContext context) {
-    final circles = ['Nom', 'Heartstrings', 'The Void', 'Main Feed'];
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 3.5, height: 22,
-                decoration: BoxDecoration(gradient: const LinearGradient(colors: [BT.pastelBlue, BT.pastelPurple]), borderRadius: BorderRadius.circular(2)),
-              ),
-              const SizedBox(width: 10),
-              const Text('Switch Circle', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: BT.textPrimary)),
-            ],
-          ),
-          const SizedBox(height: 16),
-          ...List.generate(circles.length, (i) {
-            final c = circles[i];
-            final active = c == current;
-            return GestureDetector(
-              onTap: () { onSelect(c); Navigator.pop(context); },
-              child: Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  color: active ? BT.pastelBlue.withOpacity(0.12) : BT.bg,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: active ? BT.pastelBlue.withOpacity(0.5) : BT.divider, width: 1),
-                ),
-                child: Row(
-                  children: [
-                    Container(width: 8, height: 8, decoration: BoxDecoration(color: active ? BT.pastelAt(i) : BT.divider, shape: BoxShape.circle)),
-                    const SizedBox(width: 12),
-                    Text(c, style: TextStyle(fontWeight: active ? FontWeight.w800 : FontWeight.w500, fontSize: 14, color: BT.textPrimary)),
-                    const Spacer(),
-                    if (active) const Icon(Icons.check_rounded, color: Color(0xFF6AAED6), size: 18),
-                  ],
-                ),
-              ),
-            );
-          }),
-          const SizedBox(height: 8),
-        ],
-      ),
-    );
-  }
-}
 
 // ============================================================================
 // NEW: SMART CACHE AVATAR

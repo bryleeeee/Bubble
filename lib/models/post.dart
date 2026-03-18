@@ -102,7 +102,13 @@ class Post {
   int repostCount;
   final List<String> imageUrls;
   final MusicTrack? music;
-  final List<String> seenBy; // <-- Added this back!
+  final List<String> seenBy; 
+  final String? circle; 
+  final Map<String, List<String>> reactions; 
+  
+  // ── NEW: GHOST MODE FIELDS ──
+  final bool isGhost;
+  final DateTime? expiresAt;
 
   final bool isRepost;
   final String? repostedBy;
@@ -119,7 +125,9 @@ class Post {
     this.avatarColorIndex = 0, required this.timestamp, required this.text,
     required this.mood, required this.likes, required this.commentCount,
     this.repostCount = 0, this.imageUrls = const [], this.music,
-    this.seenBy = const [], // <-- Added this back!
+    this.seenBy = const [], this.circle, 
+    this.reactions = const {}, 
+    this.isGhost = false, this.expiresAt, // ── NEW ──
     this.isRepost = false, this.repostedBy, this.originalPostId,
     this.originalAuthor, this.originalAvatarSeed, this.originalAvatarColorIndex = 0,
     this.originalText, this.originalTimestamp, this.originalImageUrls = const [],
@@ -139,6 +147,24 @@ class Post {
     if (data['originalImageUrls'] != null) originalParsedUrls = List<String>.from(data['originalImageUrls']);
     else if (data['originalImageUrl'] != null) originalParsedUrls = [data['originalImageUrl'] as String];
 
+    Map<String, List<String>> parsedReactions = {};
+    if (data['reactions'] != null) {
+      final raw = data['reactions'] as Map<String, dynamic>;
+      raw.forEach((key, value) {
+        if (value is List) {
+          parsedReactions[key] = List<String>.from(value);
+        } else if (value is num) {
+          parsedReactions[key] = ['@Unknown']; 
+        }
+      });
+    }
+    
+    // ── NEW: Parse the Expiration Date ──
+    DateTime? expirationDate;
+    if (data['expiresAt'] != null) {
+      expirationDate = (data['expiresAt'] as Timestamp).toDate();
+    }
+
     return Post(
       id: doc.id, author: data['author'] ?? 'Unknown',
       avatarSeed: data['avatarSeed'] ?? 'X', avatarColorIndex: data['avatarColorIndex'] ?? 0,
@@ -147,7 +173,11 @@ class Post {
       likes: data['likes'] ?? 0, commentCount: data['commentCount'] ?? 0,
       repostCount: data['repostCount'] ?? 0, imageUrls: parsedUrls,
       music: data['music'] != null ? MusicTrack.fromMap(data['music']) : null,
-      seenBy: List<String>.from(data['seenBy'] ?? []), // <-- Added this back!
+      seenBy: List<String>.from(data['seenBy'] ?? []), 
+      circle: data['circle'], 
+      reactions: parsedReactions, 
+      isGhost: data['isGhost'] ?? false, // ── NEW ──
+      expiresAt: expirationDate,         // ── NEW ──
       isRepost: data['isRepost'] ?? false, repostedBy: data['repostedBy'],
       originalPostId: data['originalPostId'], originalAuthor: data['originalAuthor'],
       originalAvatarSeed: data['originalAvatarSeed'],

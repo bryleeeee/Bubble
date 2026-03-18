@@ -12,13 +12,18 @@ import 'package:intl/intl.dart' hide TextDirection;
 import '../models/post.dart';
 import '../widgets/bubble_components.dart';
 import '../widgets/rant_card.dart';
+import '../widgets/music_picker_sheet.dart'; 
+import '../widgets/media_viewers.dart'; // ── NEW: Fixed the missing import! ──
 import 'thread_screen.dart';
 
 // ============================================================================
 // PROFILE SCREEN
 // ============================================================================
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({Key? key}) : super(key: key);
+  final String targetCircle; 
+  final String? visitedHandle; 
+
+  const ProfileScreen({Key? key, required this.targetCircle, this.visitedHandle}) : super(key: key);
   @override State<ProfileScreen> createState() => _ProfileScreenState();
 }
 
@@ -32,6 +37,7 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
   late Animation<Offset> _entrySlide;
 
   String _queryHandle = '';
+  String _myOwnHandle = ''; 
 
   @override
   void initState() {
@@ -43,7 +49,7 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
     _entrySlide = Tween<Offset>(begin: const Offset(0, 0.06), end: Offset.zero)
         .animate(CurvedAnimation(parent: _entryCtrl, curve: Curves.easeOut));
     _entryCtrl.forward();
-    _loadUserHandle();
+    _loadHandles();
   }
 
   @override
@@ -53,18 +59,23 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
     super.dispose();
   }
 
-  Future<void> _loadUserHandle() async {
+  Future<void> _loadHandles() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
+
     try {
       final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
-      String handle = '';
-      if (doc.exists && doc.data() != null) handle = doc.data()!['username'] ?? '';
-      if (handle.isEmpty) handle = user.displayName ?? 'user';
-      handle = handle.replaceAll('@', '');
-      if (mounted) setState(() => _queryHandle = '@$handle');
+      if (doc.exists && doc.data() != null) {
+        _myOwnHandle = '@${doc.data()!['username']}';
+      }
     } catch (e) {
-      if (mounted) setState(() => _queryHandle = '@${user.displayName?.replaceAll('@', '') ?? 'user'}');
+      _myOwnHandle = '@${user.displayName?.replaceAll('@', '') ?? 'user'}';
+    }
+
+    if (widget.visitedHandle != null) {
+      if (mounted) setState(() => _queryHandle = widget.visitedHandle!);
+    } else {
+      if (mounted) setState(() => _queryHandle = _myOwnHandle);
     }
   }
 
@@ -72,7 +83,20 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
     HapticFeedback.lightImpact();
     await Navigator.push(context, MaterialPageRoute(
         builder: (_) => EditProfileScreen(currentData: currentData)));
-    _loadUserHandle();
+    _loadHandles();
+  }
+
+  Stream<List<Map<String, dynamic>>> get _userStream {
+    if (widget.visitedHandle != null) {
+      final cleanHandle = widget.visitedHandle!.replaceAll('@', '');
+      return FirebaseFirestore.instance.collection('users')
+          .where('username', isEqualTo: cleanHandle).limit(1).snapshots()
+          .map((snap) => snap.docs.map((d) => d.data()).toList());
+    } else {
+      final uid = FirebaseAuth.instance.currentUser!.uid;
+      return FirebaseFirestore.instance.collection('users').doc(uid).snapshots()
+          .map((snap) => snap.exists && snap.data() != null ? [snap.data() as Map<String, dynamic>] : []);
+    }
   }
 
   @override
@@ -80,34 +104,44 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return const SizedBox();
 
+    final bool isMe = widget.visitedHandle == null || widget.visitedHandle == _myOwnHandle;
+
     return DefaultTabController(
       length: 2,
       child: Scaffold(
         backgroundColor: BT.bg,
+        appBar: widget.visitedHandle != null ? AppBar(
+          backgroundColor: BT.card,
+          elevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new_rounded, color: BT.textPrimary, size: 18),
+            onPressed: () => Navigator.pop(context),
+          ),
+          title: Text(widget.visitedHandle!, style: const TextStyle(color: BT.textPrimary, fontWeight: FontWeight.w800, fontSize: 16)),
+        ) : null,
         body: FadeTransition(
           opacity: _entryOpacity,
           child: SlideTransition(
             position: _entrySlide,
             child: NestedScrollView(
               headerSliverBuilder: (context, innerBoxIsScrolled) => [
-                // ── PROFILE HEADER (Banner now starts at the very top edge) ──
                 SliverToBoxAdapter(
-                  child: StreamBuilder<DocumentSnapshot>(
-                    stream: FirebaseFirestore.instance.collection('users').doc(user.uid).snapshots(),
+                  child: StreamBuilder<List<Map<String, dynamic>>>(
+                    stream: _userStream,
                     builder: (context, snapshot) {
                       Map<String, dynamic> userData = {};
-                      if (snapshot.hasData && snapshot.data!.exists) {
-                        userData = snapshot.data!.data() as Map<String, dynamic>;
+                      if (snapshot.hasData && snapshot.data!.isNotEmpty) {
+                        userData = snapshot.data!.first;
                       }
-                      String streamUsername = (userData['username'] ?? user.displayName ?? 'user').replaceAll('@', '');
+
+                      String streamUsername = (userData['username'] ?? (widget.visitedHandle != null ? widget.visitedHandle!.replaceAll('@', '') : user.displayName ?? 'user')).replaceAll('@', '');
                       final displayName  = userData['name']       ?? streamUsername;
                       final initial      = displayName.isNotEmpty  ? displayName[0].toUpperCase() : '✦';
                       final bio          = userData['bio']         ?? 'Living in the Bubble 🫧\nJust popping rants and sharing vibes.';
                       final profileUrl   = userData['profileUrl']  ?? '';
                       final bannerUrl    = userData['bannerUrl']   ?? '';
-                      final creationTime = user.metadata.creationTime;
-                      final joinedDate   = creationTime != null
-                          ? DateFormat('MMMM yyyy').format(creationTime) : 'March 2026';
+                      
+                      final joinedDate = 'March 2026'; 
 
                       final lastActiveRaw = userData['lastActiveAt'];
                       _ActivityStatus activityStatus = _ActivityStatus.none;
@@ -119,8 +153,6 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
                       }
 
                       final circleCount = userData['circleCount']?.toString() ?? '—';
-                      final streak      = userData['streak'] != null ? '${userData['streak']} 🔥' : '—';
-                      final topMood     = userData['topMood'] ?? '✨ Vibing';
 
                       return _ProfileHeader(
                         displayName: displayName,
@@ -130,19 +162,17 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
                         profileUrl: profileUrl,
                         bannerUrl: bannerUrl,
                         joinedDate: joinedDate,
-                        topMood: topMood,
                         circleCount: circleCount,
-                        streak: streak,
                         activityStatus: activityStatus,
                         queryHandle: _queryHandle,
                         userData: userData,
+                        isMe: isMe, 
                         onEditTap: () => _openEditProfile(userData),
                       );
                     },
                   ),
                 ),
 
-                // ── STICKY TAB BAR ─────────────────────────────────────────
                 SliverPersistentHeader(
                   pinned: true,
                   delegate: _TabBarDelegate(
@@ -179,11 +209,11 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
     );
   }
 
-  // ── RANTS FEED ──────────────────────────────────────────────────────────────
   Widget _buildMyFeed(String queryHandle) {
     final query = FirebaseFirestore.instance
         .collection('posts')
         .where('author', isEqualTo: queryHandle)
+        .where('circle', isEqualTo: widget.targetCircle) 
         .orderBy('createdAt', descending: true);
 
     return StreamBuilder<QuerySnapshot>(
@@ -203,12 +233,12 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
 
         if (docs.isEmpty) return Center(child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
-          children: const [
-            Text('📭', style: TextStyle(fontSize: 44)),
-            SizedBox(height: 14),
-            Text('No rants yet.', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17, color: BT.textPrimary)),
-            SizedBox(height: 6),
-            Text('Your bubble pop-offs will show here.', style: TextStyle(color: BT.textSecondary, fontSize: 14)),
+          children: [
+            const Text('📭', style: TextStyle(fontSize: 44)),
+            const SizedBox(height: 14),
+            const Text('No rants yet.', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17, color: BT.textPrimary)),
+            const SizedBox(height: 6),
+            Text(widget.visitedHandle != null ? 'They haven\'t posted in ${widget.targetCircle} yet.' : 'You haven\'t posted in ${widget.targetCircle} yet.', style: const TextStyle(color: BT.textSecondary, fontSize: 14)),
           ]));
 
         return ListView.builder(
@@ -235,11 +265,11 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
     );
   }
 
-  // ── REPLIES FEED WITH CONTEXT BOX ────────────────────────────────────────────
   Widget _buildMyRepliesFeed(String queryHandle) {
     final query = FirebaseFirestore.instance
         .collectionGroup('comments')
         .where('author', isEqualTo: queryHandle)
+        .where('circle', isEqualTo: widget.targetCircle)
         .orderBy('createdAt', descending: true);
 
     return StreamBuilder<QuerySnapshot>(
@@ -255,7 +285,7 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
               const SizedBox(height: 12),
               Text(
                 needsIndex
-                    ? 'This tab needs a Firestore index.\nOpen your debug console, tap the link in the error, and create the index.'
+                    ? 'Firestore Index needed for Replies!\nOpen your debug console, tap the link in the error, and create the index.'
                     : 'Something went wrong loading replies.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: BT.textSecondary, fontSize: 13, height: 1.5)),
@@ -267,12 +297,12 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
         final docs = snapshot.data?.docs ?? [];
         if (docs.isEmpty) return Center(child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
-          children: const [
-            Text('💬', style: TextStyle(fontSize: 44)),
-            SizedBox(height: 14),
-            Text('No replies yet.', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17, color: BT.textPrimary)),
-            SizedBox(height: 6),
-            Text('When you reply to others, they show up here.', style: TextStyle(color: BT.textSecondary, fontSize: 14)),
+          children: [
+            const Text('💬', style: TextStyle(fontSize: 44)),
+            const SizedBox(height: 14),
+            const Text('No replies yet.', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17, color: BT.textPrimary)),
+            const SizedBox(height: 6),
+            Text(widget.visitedHandle != null ? 'Their replies in ${widget.targetCircle} will show here.' : 'Your replies in ${widget.targetCircle} will show here.', style: const TextStyle(color: BT.textSecondary, fontSize: 14)),
           ]));
 
         return ListView.builder(
@@ -400,18 +430,19 @@ extension _ActivityStatusX on _ActivityStatus {
 // ============================================================================
 class _ProfileHeader extends StatefulWidget {
   final String displayName, username, initial, bio, profileUrl, bannerUrl;
-  final String joinedDate, topMood, circleCount, streak, queryHandle;
+  final String joinedDate, circleCount, queryHandle;
   final _ActivityStatus activityStatus;
   final Map<String, dynamic> userData;
+  final bool isMe; 
   final VoidCallback onEditTap;
 
   const _ProfileHeader({
     required this.displayName, required this.username, required this.initial,
     required this.bio, required this.profileUrl, required this.bannerUrl,
-    required this.joinedDate, required this.topMood,
-    required this.circleCount, required this.streak,
+    required this.joinedDate, 
+    required this.circleCount, 
     required this.activityStatus, required this.queryHandle,
-    required this.userData, required this.onEditTap,
+    required this.userData, required this.isMe, required this.onEditTap,
   });
 
   @override State<_ProfileHeader> createState() => _ProfileHeaderState();
@@ -429,11 +460,13 @@ class _ProfileHeaderState extends State<_ProfileHeader> with SingleTickerProvide
 
   @override
   Widget build(BuildContext context) {
+    final MusicTrack? favoriteSong = widget.userData['favoriteSong'] != null 
+        ? MusicTrack.fromMap(widget.userData['favoriteSong']) 
+        : null;
+
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      // ── BANNER ──────────────────────────────────────────────────────────────
       _AnimatedBanner(bannerUrl: widget.bannerUrl, shimmerCtrl: _shimmerCtrl),
 
-      // ── FROSTED GLASS INFO CARD ──────────────────────────────────────────
       Transform.translate(
         offset: const Offset(0, -44),
         child: Padding(
@@ -455,7 +488,6 @@ class _ProfileHeaderState extends State<_ProfileHeader> with SingleTickerProvide
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 18),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
 
-                    // ── AVATAR + EDIT ROW ──────────────────────────────────
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -465,24 +497,25 @@ class _ProfileHeaderState extends State<_ProfileHeader> with SingleTickerProvide
                           profileUrl: widget.profileUrl,
                           initial: widget.initial,
                           shimmerCtrl: _shimmerCtrl),
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 4, top: 12),
-                          child: GestureDetector(
-                            onTap: widget.onEditTap,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
-                              decoration: BoxDecoration(
-                                color: BT.bg,
-                                borderRadius: BorderRadius.circular(22),
-                                border: Border.all(color: BT.divider, width: 1.5),
-                                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 6)]),
-                              child: const Text('Edit profile',
-                                style: TextStyle(color: BT.textPrimary, fontWeight: FontWeight.w800, fontSize: 13.5))))),
+                        
+                        if (widget.isMe)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 4, top: 12),
+                            child: GestureDetector(
+                              onTap: widget.onEditTap,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+                                decoration: BoxDecoration(
+                                  color: BT.bg,
+                                  borderRadius: BorderRadius.circular(22),
+                                  border: Border.all(color: BT.divider, width: 1.5),
+                                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 6)]),
+                                child: const Text('Edit profile',
+                                  style: TextStyle(color: BT.textPrimary, fontWeight: FontWeight.w800, fontSize: 13.5))))),
                       ]),
 
                     const SizedBox(height: 10),
 
-                    // ── NAME + HANDLE + ACTIVE DOT ─────────────────────────
                     Text(widget.displayName,
                       style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900,
                         color: BT.textPrimary, letterSpacing: -0.5)),
@@ -509,12 +542,10 @@ class _ProfileHeaderState extends State<_ProfileHeader> with SingleTickerProvide
 
                     const SizedBox(height: 14),
 
-                    // ── EXPANDABLE BIO ──────────────────────────────────────
                     _ExpandableBio(bio: widget.bio),
 
                     const SizedBox(height: 14),
 
-                    // ── JOINED DATE ─────────────────────────────────────────
                     Row(mainAxisSize: MainAxisSize.min, children: [
                       const Text('🫧', style: TextStyle(fontSize: 13)),
                       const SizedBox(width: 6),
@@ -522,15 +553,24 @@ class _ProfileHeaderState extends State<_ProfileHeader> with SingleTickerProvide
                         style: const TextStyle(color: BT.textSecondary, fontSize: 13, fontWeight: FontWeight.w500)),
                     ]),
 
+                    if (favoriteSong != null) ...[
+                      const SizedBox(height: 16),
+                      Row(children: [
+                        const Icon(Icons.music_note_rounded, size: 14, color: BT.pastelPurple),
+                        const SizedBox(width: 5),
+                        const Text('Profile Anthem', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: BT.pastelPurple)),
+                      ]),
+                      const SizedBox(height: 8),
+                      MusicAttachmentCard(track: favoriteSong),
+                    ],
+
                     const SizedBox(height: 16),
 
-                    // ── REAL STAT PILLS ────────────────────────────────────
                     widget.queryHandle.isNotEmpty
                         ? _LiveStatRow(
                             queryHandle: widget.queryHandle,
                             circleCount: widget.circleCount,
-                            streak: widget.streak,
-                            topMood: widget.topMood)
+                          )
                         : const SizedBox(height: 36),
 
                   ]),
@@ -546,7 +586,7 @@ class _ProfileHeaderState extends State<_ProfileHeader> with SingleTickerProvide
 }
 
 // ============================================================================
-// EXPANDABLE BIO  (3-line clamp with more/less toggle)
+// EXPANDABLE BIO 
 // ============================================================================
 class _ExpandableBio extends StatefulWidget {
   final String bio;
@@ -596,27 +636,83 @@ class _ExpandableBioState extends State<_ExpandableBio> {
 }
 
 // ============================================================================
-// LIVE STAT ROW  (real post count from Firestore)
+// LIVE STAT ROW  
 // ============================================================================
 class _LiveStatRow extends StatelessWidget {
-  final String queryHandle, circleCount, streak, topMood;
+  final String queryHandle, circleCount;
   const _LiveStatRow({
     required this.queryHandle, required this.circleCount,
-    required this.streak, required this.topMood,
   });
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<AggregateQuerySnapshot>(
-      future: FirebaseFirestore.instance
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
           .collection('posts')
           .where('author', isEqualTo: queryHandle)
-          .count()
-          .get(),
+          .orderBy('createdAt', descending: true)
+          .limit(100)
+          .snapshots(),
       builder: (context, snapshot) {
-        final postCount = snapshot.hasData
-            ? snapshot.data!.count.toString()
-            : '—';
+        String postCount = '—';
+        String streak = '—';
+        String topMood = '✨ Vibing';
+
+        if (snapshot.hasData) {
+          final docs = snapshot.data!.docs;
+          postCount = docs.length.toString();
+          
+          int currentStreak = 0;
+          if (docs.isNotEmpty) {
+            Set<String> activeDates = {};
+            for (var doc in docs) {
+              final data = doc.data() as Map<String, dynamic>;
+              if (data['createdAt'] != null) {
+                DateTime dt = (data['createdAt'] as Timestamp).toDate();
+                activeDates.add(DateFormat('yyyy-MM-dd').format(dt));
+              }
+            }
+
+            DateTime checkDate = DateTime.now();
+            String todayStr = DateFormat('yyyy-MM-dd').format(checkDate);
+            String yesterdayStr = DateFormat('yyyy-MM-dd').format(checkDate.subtract(const Duration(days: 1)));
+
+            if (activeDates.contains(todayStr)) {
+              currentStreak++;
+              checkDate = checkDate.subtract(const Duration(days: 1));
+            } else if (activeDates.contains(yesterdayStr)) {
+              checkDate = checkDate.subtract(const Duration(days: 1));
+              currentStreak++;
+              checkDate = checkDate.subtract(const Duration(days: 1));
+            }
+
+            if (currentStreak > 0) {
+              while (true) {
+                String checkStr = DateFormat('yyyy-MM-dd').format(checkDate);
+                if (activeDates.contains(checkStr)) {
+                  currentStreak++;
+                  checkDate = checkDate.subtract(const Duration(days: 1));
+                } else {
+                  break;
+                }
+              }
+            }
+          }
+          streak = currentStreak > 0 ? '$currentStreak 🔥' : '0';
+
+          Map<String, int> moodCounts = {};
+          for (var doc in docs) {
+            final data = doc.data() as Map<String, dynamic>;
+            String m = data['mood'] ?? 'none';
+            if (m != 'none') {
+              moodCounts[m] = (moodCounts[m] ?? 0) + 1;
+            }
+          }
+          if (moodCounts.isNotEmpty) {
+            var sorted = moodCounts.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+            topMood = MoodTagX.fromString(sorted.first.key).label;
+          }
+        }
 
         return Wrap(spacing: 10, runSpacing: 10, children: [
           _StatPill(count: postCount,   label: 'Popped',  color: BT.pastelPurple),
@@ -680,7 +776,6 @@ class _AnimatedBannerState extends State<_AnimatedBanner> with SingleTickerProvi
 
   @override
   Widget build(BuildContext context) {
-    // INCREASED HEIGHT HERE TO PUSH BANNER UP
     return SizedBox(height: 175,
       child: Stack(fit: StackFit.expand, children: [
         if (widget.bannerUrl.isNotEmpty)
@@ -796,6 +891,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> with SingleTicker
   Uint8List? _newAvatarBytes, _newBannerBytes;
   bool _isSaving = false, _hasChanges = false;
   int _bioLength = 0;
+  
+  MusicTrack? _profileMusic;
 
   late AnimationController _ringCtrl;
 
@@ -815,6 +912,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> with SingleTicker
     _usernameCtrl = TextEditingController(text: defaultUsername);
     _bioCtrl      = TextEditingController(text: defaultBio);
     _bioLength    = defaultBio.length;
+
+    if (widget.currentData['favoriteSong'] != null) {
+      _profileMusic = MusicTrack.fromMap(widget.currentData['favoriteSong']);
+    }
 
     void markChanged() => setState(() => _hasChanges = true);
     _nameCtrl.addListener(markChanged);
@@ -891,6 +992,13 @@ class _EditProfileScreenState extends State<EditProfileScreen> with SingleTicker
         'bio': _bioCtrl.text.trim(),
         'lastActiveAt': FieldValue.serverTimestamp(),
       };
+      
+      if (_profileMusic != null) {
+        updates['favoriteSong'] = _profileMusic!.toMap();
+      } else {
+        updates['favoriteSong'] = FieldValue.delete();
+      }
+
       if (newAvatarUrl != null) updates['profileUrl'] = newAvatarUrl;
       if (newBannerUrl != null) updates['bannerUrl']  = newBannerUrl;
 
@@ -1068,6 +1176,41 @@ class _EditProfileScreenState extends State<EditProfileScreen> with SingleTicker
                       counterText: ''))),
 
                 const SizedBox(height: 28),
+                
+                const _FieldLabel('Profile Anthem'),
+                const SizedBox(height: 7),
+                if (_profileMusic != null) ...[
+                  MusicAttachmentCard(track: _profileMusic!),
+                  const SizedBox(height: 6),
+                  GestureDetector(
+                    onTap: () => setState(() { _profileMusic = null; _hasChanges = true; }),
+                    child: const Text('Remove anthem', style: TextStyle(color: BT.heartRed, fontSize: 12, fontWeight: FontWeight.w600, decoration: TextDecoration.underline)),
+                  ),
+                ] else ...[
+                  GestureDetector(
+                    onTap: () => showModalBottomSheet(
+                      context: context, isScrollControlled: true, backgroundColor: Colors.white,
+                      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+                      builder: (_) => MusicPickerSheet(onSelect: (t) { 
+                        setState(() { _profileMusic = t; _hasChanges = true; }); 
+                        Navigator.pop(context); 
+                      })
+                    ),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      decoration: BoxDecoration(
+                        color: BT.card, borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: BT.divider, width: 1.5)
+                      ),
+                      child: const Row(children: [
+                        Icon(Icons.music_note_rounded, color: BT.pastelPurple, size: 20),
+                        SizedBox(width: 10),
+                        Text('Pick a song...', style: TextStyle(color: BT.textTertiary, fontWeight: FontWeight.w600, fontSize: 15)),
+                      ]),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 28),
 
                 Container(
                   width: double.infinity,
@@ -1113,7 +1256,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> with SingleTicker
   }
 }
 
-// ── Small reusable form widgets ───────────────────────────────────────────────
 class _FieldLabel extends StatelessWidget {
   final String label;
   const _FieldLabel(this.label);
