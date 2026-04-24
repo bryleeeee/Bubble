@@ -8,6 +8,7 @@ import 'package:intl/intl.dart' hide TextDirection;
 import '../models/post.dart';
 import '../widgets/bubble_components.dart';
 import '../widgets/rant_card.dart';
+import 'notifications_screen.dart'; // Adjust path if needed!
 
 const Color appBgTint = Color(0xFFFFF5F8);
 
@@ -275,7 +276,6 @@ class _ThreadScreenState extends State<ThreadScreen> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // FETCH REPLY AUTHOR AVATAR
             BubbleAvatar(author: data['author'] ?? '', seed: data['avatarSeed'] ?? 'X', colorIndex: data['avatarColorIndex'] ?? 0, radius: 17),
             const SizedBox(width: 10),
             Expanded(
@@ -356,7 +356,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
   Widget _buildReplyBar() {
     final currentUser = FirebaseAuth.instance.currentUser;
     final initial = currentUser?.displayName?.isNotEmpty == true ? currentUser!.displayName![0].toUpperCase() : '✦';
-    final name = currentUser?.displayName != null ? '@${currentUser!.displayName}' : '@Me';
+    
+    // ── FIX: Prevent double @@s when saving ──
+    final rawName = currentUser?.displayName?.replaceAll('@', '') ?? 'Me';
+    final name = '@$rawName';
 
     return Container(
       padding: EdgeInsets.only(
@@ -371,7 +374,6 @@ class _ThreadScreenState extends State<ThreadScreen> {
       ),
       child: Row(
         children: [
-          // SHOW LIVE AVATAR ON REPLY BAR
           BubbleAvatar(author: name, seed: initial, colorIndex: 4, radius: 17),
           const SizedBox(width: 10),
           Expanded(
@@ -404,6 +406,22 @@ class _ThreadScreenState extends State<ThreadScreen> {
                   await FirebaseFirestore.instance.collection('posts').doc(widget.post.id).update({
                     'commentCount': FieldValue.increment(1),
                   });
+
+                  // ── NEW NOTIFICATION LOGIC ──
+                  if (widget.post.author != name) { 
+                    final targetUid = await NotificationService.getUidFromHandle(widget.post.author);
+
+                    if (targetUid != null) {
+                      final shortText = text.length > 25 ? '${text.substring(0, 25)}...' : text;
+                      await NotificationService.sendRealNotification(
+                        targetUserId: targetUid,
+                        type: 'comment',
+                        actorName: name,
+                        message: ' replied: "$shortText"',
+                        referenceId: widget.post.id,
+                      );
+                    }
+                  }
                 } catch (e) {
                   if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to comment: $e')));
                 }

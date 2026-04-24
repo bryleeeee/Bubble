@@ -12,6 +12,7 @@ import '../models/post.dart';
 import '../screens/thread_screen.dart';
 import '../screens/quote_compose_screen.dart';
 import '../screens/profile_screen.dart';
+import '../screens/notifications_screen.dart'; 
 import 'media_viewers.dart';
 import 'bubble_components.dart';
 import 'ghost_widgets.dart';
@@ -94,10 +95,10 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
   }
 
   bool    _showTray   = false;
-  String? _myReaction;                        
-  String? _hoverEmoji;                        
-  bool    _hoverCustomize = false;              
-  String? _floatEmoji;                        
+  String? _myReaction;                                
+  String? _hoverEmoji;                                
+  bool    _hoverCustomize = false;                    
+  String? _floatEmoji;                                
   Map<String, List<String>> _reactions = {};  
   final GlobalKey _trayKey = GlobalKey();        
   final GlobalKey _customizeBtnKey = GlobalKey(); 
@@ -124,6 +125,11 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) {
+      _liked = widget.post.likedBy.contains(uid);
+    }
 
     _heartCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 350));
     _heartScale = TweenSequence([
@@ -182,6 +188,26 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
     super.dispose();
   }
 
+  @override
+  void didUpdateWidget(RantCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    
+    if (widget.post.reactions != oldWidget.post.reactions) {
+      setState(() {
+        _loadReactions();
+      });
+    }
+    
+    if (widget.post.likedBy != oldWidget.post.likedBy) {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid != null) {
+        setState(() {
+          _liked = widget.post.likedBy.contains(uid);
+        });
+      }
+    }
+  }
+
   String? _emojiAtPosition(Offset globalPos) {
     final ctx = _trayKey.currentContext;
     if (ctx == null) return null;
@@ -202,8 +228,9 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
   void _loadReactions() {
     final raw = widget.post.reactions; 
     if (raw != null) {
-      _reactions = raw;
+      _reactions = Map<String, List<String>>.from(raw); 
       final myName = _myName;
+      _myReaction = null; 
       for (final entry in _reactions.entries) {
         if (entry.value.contains(myName)) {
           _myReaction = entry.key;
@@ -215,7 +242,8 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
 
   String get _myName {
     final u = FirebaseAuth.instance.currentUser;
-    return (u?.displayName?.isNotEmpty == true) ? '@${u!.displayName}' : '@Me';
+    final rawName = u?.displayName?.replaceAll('@', '') ?? 'Me';
+    return '@$rawName';
   }
 
   void _openCustomizeSheet() async {
@@ -284,16 +312,17 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
     HapticFeedback.lightImpact();
     final myName = _myName;
     final isRemoving = _myReaction == emoji;
+    final oldReaction = _myReaction; 
     
     if (!isRemoving) setState(() => _floatEmoji = emoji);
     await _closeTray();
 
     setState(() {
-      if (_myReaction != null && _myReaction != emoji) {
-        _reactions[_myReaction!]?.remove(myName);
-        if (_reactions[_myReaction!]?.isEmpty == true) _reactions.remove(_myReaction!);
+      if (oldReaction != null && oldReaction != emoji) {
+        _reactions[oldReaction]?.remove(myName);
+        if (_reactions[oldReaction]?.isEmpty == true) _reactions.remove(oldReaction);
       }
-      if (_myReaction == emoji) {
+      if (isRemoving) {
         _reactions[emoji]?.remove(myName);
         if (_reactions[emoji]?.isEmpty == true) _reactions.remove(emoji);
         _myReaction = null;
@@ -305,28 +334,43 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
     });
 
     try {
-      final Map<String, dynamic> update = {};
-      for (final entry in _reactions.entries) {
-        update['reactions.${entry.key}'] = entry.value;
+      final Map<String, dynamic> updates = {};
+      
+      if (oldReaction != null) {
+        if (_reactions.containsKey(oldReaction)) {
+          updates['reactions.$oldReaction'] = _reactions[oldReaction];
+        } else {
+          updates['reactions.$oldReaction'] = FieldValue.delete();
+        }
       }
       
-      if (_myReaction == null) {
-        update.clear();
-        final Map<String, dynamic> fullMap = {};
-        for (final entry in _reactions.entries) {
-          fullMap['reactions.${entry.key}'] = entry.value;
-        }
-        await FirebaseFirestore.instance
-            .collection('posts')
-            .doc(widget.post.id)
-            .update(fullMap.isEmpty ? {'reactions': {}} : fullMap);
-      } else {
-        await FirebaseFirestore.instance
-            .collection('posts')
-            .doc(widget.post.id)
-            .update(update);
+      if (!isRemoving) {
+        updates['reactions.$emoji'] = _reactions[emoji];
       }
-    } catch (_) {}
+
+      if (updates.isNotEmpty) {
+        await FirebaseFirestore.instance
+            .collection('posts')
+            .doc(widget.post.id)
+            .update(updates);
+      }
+
+      if (!isRemoving && widget.post.author != myName) {
+        final targetUid = await NotificationService.getUidFromHandle(widget.post.author);
+
+        if (targetUid != null) {
+          await NotificationService.sendRealNotification(
+            targetUserId: targetUid,
+            type: 'reaction', 
+            actorName: myName,
+            message: ' reacted $emoji to your rant.', 
+            referenceId: widget.post.id,
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Failed to sync reaction: $e');
+    }
   }
 
   List<Particle> _generateParticles() {
@@ -372,10 +416,52 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
     }
   }
 
-  void _toggleLike() {
+  void _toggleLike() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    final uid = user.uid;
+
     HapticFeedback.lightImpact();
+    
+    final wasLiked = _liked;
+    
     setState(() => _liked = !_liked);
     _heartCtrl.forward(from: 0);
+
+    final myName = _myName;
+
+    try {
+      final docRef = FirebaseFirestore.instance.collection('posts').doc(widget.post.id);
+      
+      if (wasLiked) {
+        await docRef.update({
+          'likedBy': FieldValue.arrayRemove([uid])
+        });
+      } else {
+        await docRef.update({
+          'likedBy': FieldValue.arrayUnion([uid])
+        });
+
+        if (widget.post.author != myName) {
+          final targetUid = await NotificationService.getUidFromHandle(widget.post.author);
+
+          if (targetUid != null) {
+            await NotificationService.sendRealNotification(
+              targetUserId: targetUid,
+              type: 'like',
+              actorName: myName,
+              message: ' liked your rant.',
+              referenceId: widget.post.id,
+            );
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Failed to sync like: $e');
+      if (mounted) {
+        setState(() => _liked = wasLiked);
+      }
+    }
   }
 
   void _goToProfile(String handle) {
@@ -385,7 +471,24 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
         builder: (_) => ProfileScreen(targetCircle: widget.post.circle!, visitedHandle: handle)));
   }
 
-  // ── FULL SCREEN IMAGE VIEWER ──
+  // ── NEW: SHOW USERS WHO LIKED OR REACTED ──
+  void _showReactorsSheet({required String title, IconData? icon, Color? iconColor, List<String>? uids, List<String>? handles}) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true, 
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (_) => _ReactorsSheet(
+        title: title,
+        icon: icon,
+        iconColor: iconColor,
+        uids: uids ?? [],
+        handles: handles ?? [],
+        onUserTap: _goToProfile,
+      ),
+    );
+  }
+
   void _openImageFullScreen(List<String> urls, dynamic param) {
     int index = 0;
     if (param is int) index = param;
@@ -617,7 +720,6 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
     );
   }
 
-  // ── DYNAMIC COLORS FOR GHOST MODE ──
   Color get _textPrimary => widget.post.isGhost ? Colors.white : BT.textPrimary;
   Color get _textSecondary => widget.post.isGhost ? Colors.white70 : BT.textSecondary;
   Color get _textTertiary => widget.post.isGhost ? Colors.white54 : BT.textTertiary;
@@ -681,7 +783,6 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
             _buildCardText(p.text),
             if (p.imageUrls.isNotEmpty) Padding(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
-              // ── FIXED IMAGE VIEWER ──
               child: ImageCarousel(imageUrls: p.imageUrls, onImageTap: (val) => _openImageFullScreen(p.imageUrls, val))),
             if (p.music != null) Padding(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
@@ -718,7 +819,6 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
             _buildCardText(p.originalText ?? ''),
             if (p.originalImageUrls.isNotEmpty) Padding(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
-              // ── FIXED IMAGE VIEWER ──
               child: ImageCarousel(imageUrls: p.originalImageUrls, onImageTap: (val) => _openImageFullScreen(p.originalImageUrls, val))),
             if (p.music != null) Padding(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
@@ -744,7 +844,6 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
             _buildCardText(p.text),
             if (p.imageUrls.isNotEmpty) Padding(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
-              // ── FIXED IMAGE VIEWER ──
               child: ImageCarousel(imageUrls: p.imageUrls, onImageTap: (val) => _openImageFullScreen(p.imageUrls, val))),
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
@@ -776,7 +875,6 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
                         Padding(padding: const EdgeInsets.fromLTRB(12, 0, 12, 12), child: Text(p.originalText!, style: TextStyle(fontSize: 14, color: _textPrimary, height: 1.4))),
                       if (p.originalImageUrls.isNotEmpty)
                         Padding(padding: const EdgeInsets.only(bottom: 2),
-                          // ── FIXED IMAGE VIEWER ──
                           child: ImageCarousel(imageUrls: p.originalImageUrls, height: 160, onImageTap: (val) => _openImageFullScreen(p.originalImageUrls, val))),
                       if (p.music != null)
                         Padding(padding: const EdgeInsets.fromLTRB(12, 0, 12, 12), child: MusicAttachmentCard(track: p.music!)),
@@ -857,6 +955,11 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
 
           return GestureDetector(
             onTap: () => _pickReaction(emoji),
+            // ── NEW: LONG PRESS TO SEE WHO REACTED ──
+            onLongPress: () {
+              HapticFeedback.selectionClick();
+              _showReactorsSheet(title: 'Reacted $emoji', handles: entry.value);
+            },
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -879,6 +982,17 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
       child: Row(children: [
         GestureDetector(
           onTap: _toggleLike,
+          // ── NEW: LONG PRESS TO SEE WHO LIKED ──
+          onLongPress: () {
+            if (widget.post.likedBy.isEmpty) return;
+            HapticFeedback.selectionClick();
+            _showReactorsSheet(
+              title: 'Liked by', 
+              icon: Icons.favorite_rounded, 
+              iconColor: BT.heartRed, 
+              uids: widget.post.likedBy
+            );
+          },
           child: Row(children: [
             AnimatedBuilder(
               animation: _heartScale,
@@ -888,7 +1002,7 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
             AnimatedDefaultTextStyle(
               duration: const Duration(milliseconds: 150),
               style: TextStyle(color: _liked ? BT.heartRed : _textTertiary, fontWeight: FontWeight.w600, fontSize: 13),
-              child: Text('${widget.post.likes + (_liked ? 1 : 0)}')),
+              child: Text('${widget.post.likedBy.length}')), 
           ])),
         const SizedBox(width: 20),
         TapBounce(
@@ -1003,7 +1117,9 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
       await FirebaseFirestore.instance.collection('posts').add({
         'author': myName, 'avatarSeed': myInitial,
         'avatarColorIndex': math.Random().nextInt(6),
-        'text': '', 'mood': 'none', 'likes': 0, 'commentCount': 0, 'repostCount': 0,
+        'text': '', 'mood': 'none', 
+        'likedBy': [], 
+        'commentCount': 0, 'repostCount': 0,
         'createdAt': FieldValue.serverTimestamp(), 'displayTime': 'Just now',
         'music': widget.post.music?.toMap(), 'isRepost': true, 'seenBy': [],
         'circle': widget.post.circle,
@@ -1018,6 +1134,22 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
         'originalTimestamp': isSR ? widget.post.originalTimestamp : widget.post.timestamp,
         'originalImageUrls': isSR ? widget.post.originalImageUrls : widget.post.imageUrls,
       });
+
+      final targetAuthorName = isSR ? widget.post.originalAuthor : widget.post.author;
+      
+      if (targetAuthorName != null && targetAuthorName != myName) {
+        final targetUid = await NotificationService.getUidFromHandle(targetAuthorName);
+
+        if (targetUid != null) {
+          await NotificationService.sendRealNotification(
+            targetUserId: targetUid,
+            type: 'repost',
+            actorName: myName,
+            message: ' reposted your rant.',
+            referenceId: isSR ? widget.post.originalPostId : widget.post.id, 
+          );
+        }
+      }
     } catch (e) {
       setState(() => _reposted = false);
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to repost: $e')));
@@ -1034,7 +1166,7 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
     Future<void> pickEditImages(StateSetter setModalState) async {
       final pickedFiles = await ImagePicker().pickMultiImage();
       if (pickedFiles.isNotEmpty) {
-        int slots = 5 - (existingImageUrls.length + newImageBytes.length); // ── INCREASED TO 5 ──
+        int slots = 5 - (existingImageUrls.length + newImageBytes.length);
         if (slots <= 0) return;
         List<Uint8List> bl = [];
         for (int i = 0; i < math.min(pickedFiles.length, slots); i++) bl.add(await pickedFiles[i].readAsBytes());
@@ -1133,7 +1265,6 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
                     child: Row(mainAxisSize: MainAxisSize.min, children: [
                       Icon(Icons.image_outlined, color: (existingImageUrls.isNotEmpty || newImageBytes.isNotEmpty) ? const Color(0xFF6AAED6) : BT.textTertiary, size: 15),
                       const SizedBox(width: 5),
-                      // ── INCREASED TO 5 ──
                       Text((existingImageUrls.isEmpty && newImageBytes.isEmpty) ? 'Image' : '${existingImageUrls.length + newImageBytes.length} / 5 ✓',
                         style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: (existingImageUrls.isNotEmpty || newImageBytes.isNotEmpty) ? const Color(0xFF6AAED6) : BT.textTertiary)),
                     ]))),
@@ -1152,7 +1283,7 @@ class _RantCardState extends State<RantCard> with TickerProviderStateMixin {
               ])),
           ])))));
   }
-} // ── END OF _RantCardState
+} 
 
 // ============================================================================
 // ANIMATED SMOKE BACKGROUND FOR GHOST CARDS
@@ -1256,7 +1387,6 @@ class _ReactionTray extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // ── 6 emoji buttons ─────────────────────────────────────
                   ...reactions.asMap().entries.map((entry) {
                     final idx    = entry.key;
                     final emoji  = entry.value;
@@ -1280,7 +1410,6 @@ class _ReactionTray extends StatelessWidget {
                         onTap:      () => onPick(emoji)));
                   }),
 
-                  // ── Divider ─────────────────────────────────────────────
                   AnimatedBuilder(
                     animation: trayCtrl,
                     builder: (_, child) => Opacity(
@@ -1290,7 +1419,6 @@ class _ReactionTray extends StatelessWidget {
                       width: 1, height: 28, margin: const EdgeInsets.symmetric(horizontal: 6),
                       color: BT.divider)),
 
-                  // ── ✏️ Customize button ──────────────────────────────────
                   AnimatedBuilder(
                     animation: trayCtrl,
                     builder: (_, child) {
@@ -1325,7 +1453,6 @@ class _ReactionTray extends StatelessWidget {
   }
 }
 
-// ── Single emoji button ──────────────────────────────────────────────────────
 class _EmojiButton extends StatefulWidget {
   final String emoji;
   final bool   isSelected, isHovered;
@@ -1385,9 +1512,6 @@ class _EmojiButtonState extends State<_EmojiButton> with SingleTickerProviderSta
   }
 }
 
-// ============================================================================
-// FLOATING EMOJI (flies up from tray on selection)
-// ============================================================================
 class _FloatingEmoji extends StatefulWidget {
   final String emoji;
   final VoidCallback onDone;
@@ -1433,11 +1557,6 @@ class _FloatingEmojiState extends State<_FloatingEmoji> with SingleTickerProvide
             textAlign: TextAlign.center)))));
 }
 
-// ============================================================================
-// EMOJI CUSTOMIZE SHEET
-// ============================================================================
-
-// ── Emoji palette organized by category ──────────────────────────────────────
 const _kEmojiCategories = [
   (label: 'Feelings',  emoji: '😤',  items: ['😤','😭','🥺','😡','🤬','😱','🫠','😮‍💨','🥲','😔','😩','😫','🤯','🙃','😒','😞','😣','🤒','😓','😶']),
   (label: 'Reactions', emoji: '🔥',  items: ['🔥','💀','👀','💅','🫧','❤️','💔','🫶','👏','🤝','😮','😂','💯','🙌','✨','🎉','💥','⚡','🤣','😆']),
@@ -1477,7 +1596,6 @@ class _EmojiCustomizeSheetState extends State<_EmojiCustomizeSheet>
       } else if (_selected.length < kMaxReactions) {
         _selected.add(emoji);
       } else {
-        // Already at 6 — swap out the oldest (first)
         _selected.removeAt(0);
         _selected.add(emoji);
         HapticFeedback.mediumImpact();
@@ -1500,13 +1618,11 @@ class _EmojiCustomizeSheetState extends State<_EmojiCustomizeSheet>
           color: BT.bg,
           borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
         child: Column(children: [
-          // ── Handle ──────────────────────────────────────────────────────────
           Container(
             margin: const EdgeInsets.only(top: 10, bottom: 4),
             width: 36, height: 4,
             decoration: BoxDecoration(color: BT.divider, borderRadius: BorderRadius.circular(2))),
 
-          // ── Header ──────────────────────────────────────────────────────────
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
             child: Row(children: [
@@ -1526,7 +1642,6 @@ class _EmojiCustomizeSheetState extends State<_EmojiCustomizeSheet>
                     fontWeight: FontWeight.w500)),
               ]),
               const Spacer(),
-              // Save button — use Material InkWell so taps are always reliable
               Material(
                 color: Colors.transparent,
                 borderRadius: BorderRadius.circular(24),
@@ -1545,7 +1660,6 @@ class _EmojiCustomizeSheetState extends State<_EmojiCustomizeSheet>
 
           const SizedBox(height: 14),
 
-          // ── Current selection row ────────────────────────────────────────────
           Container(
             margin: const EdgeInsets.symmetric(horizontal: 16),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -1555,7 +1669,6 @@ class _EmojiCustomizeSheetState extends State<_EmojiCustomizeSheet>
               border: Border.all(color: BT.divider, width: 1.2),
               boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8)]),
             child: Row(children: [
-              // 6 slots
               ...List.generate(kMaxReactions, (i) {
                 final filled = i < _selected.length;
                 return Expanded(
@@ -1579,7 +1692,6 @@ class _EmojiCustomizeSheetState extends State<_EmojiCustomizeSheet>
                       child: filled
                           ? Stack(alignment: Alignment.center, children: [
                               Text(_selected[i], style: const TextStyle(fontSize: 22)),
-                              // Tap-to-remove × indicator
                               Positioned(top: 3, right: 3,
                                 child: Container(
                                   width: 14, height: 14,
@@ -1597,7 +1709,6 @@ class _EmojiCustomizeSheetState extends State<_EmojiCustomizeSheet>
 
           const SizedBox(height: 8),
 
-          // Hint
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Row(children: [
@@ -1609,7 +1720,6 @@ class _EmojiCustomizeSheetState extends State<_EmojiCustomizeSheet>
 
           const SizedBox(height: 10),
 
-          // ── Category tabs ────────────────────────────────────────────────────
           Container(
             color: BT.card,
             child: TabBar(
@@ -1627,7 +1737,6 @@ class _EmojiCustomizeSheetState extends State<_EmojiCustomizeSheet>
               tabs: _kEmojiCategories.map((c) =>
                 Tab(text: '${c.emoji} ${c.label}')).toList())),
 
-          // ── Emoji grid ───────────────────────────────────────────────────────
           Expanded(child: TabBarView(
             controller: _tabCtrl,
             children: _kEmojiCategories.map((category) {
@@ -1662,7 +1771,6 @@ class _EmojiCustomizeSheetState extends State<_EmojiCustomizeSheet>
                           duration: const Duration(milliseconds: 180),
                           curve: Curves.easeOut,
                           child: Text(emoji, style: const TextStyle(fontSize: 24))),
-                        // Checkmark badge
                         if (isChosen)
                           Positioned(top: 4, right: 4,
                             child: Container(
@@ -1676,6 +1784,163 @@ class _EmojiCustomizeSheetState extends State<_EmojiCustomizeSheet>
                 });
             }).toList())),
         ]),
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// ── NEW: REACTORS SHEET WIDGET ──
+// ============================================================================
+class _ReactorsSheet extends StatefulWidget {
+  final String title;
+  final IconData? icon;
+  final Color? iconColor;
+  final List<String> uids;
+  final List<String> handles;
+  final void Function(String) onUserTap;
+
+  const _ReactorsSheet({
+    required this.title,
+    this.icon,
+    this.iconColor,
+    required this.uids,
+    required this.handles,
+    required this.onUserTap,
+  });
+
+  @override
+  State<_ReactorsSheet> createState() => _ReactorsSheetState();
+}
+
+class _ReactorsSheetState extends State<_ReactorsSheet> {
+  bool _loading = true;
+  List<Map<String, dynamic>> _users = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchUsers();
+  }
+
+  Future<void> _fetchUsers() async {
+    List<Map<String, dynamic>> fetched = [];
+    final firestore = FirebaseFirestore.instance;
+
+    try {
+      if (widget.uids.isNotEmpty) {
+        // Fetch based on the new array of UIDs
+        for (var uid in widget.uids.take(50)) {
+          final doc = await firestore.collection('users').doc(uid).get();
+          if (doc.exists) {
+            fetched.add({...doc.data() as Map<String, dynamic>, 'uid': doc.id});
+          }
+        }
+      } else if (widget.handles.isNotEmpty) {
+        // Fetch based on handles
+        for (var handle in widget.handles.take(50)) {
+          final cleanHandle = handle.replaceAll('@', '');
+          final q = await firestore.collection('users').where('name', isEqualTo: cleanHandle).limit(1).get();
+          if (q.docs.isNotEmpty) {
+            fetched.add({...q.docs.first.data(), 'uid': q.docs.first.id});
+          } else {
+            // If the user deleted their account but their reaction remains
+            fetched.add({'name': cleanHandle, 'profileUrl': '', 'fallback': true});
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error fetching reactors: $e');
+    }
+
+    if (mounted) {
+      setState(() {
+        _users = fetched;
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: BoxConstraints(
+        // Prevents the sheet from taking up the whole screen if there are a ton of likes
+        maxHeight: MediaQuery.of(context).size.height * 0.6,
+      ),
+      child: SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Standard Bubble Sheet Handle
+            Container(
+              margin: const EdgeInsets.symmetric(vertical: 12),
+              width: 36, height: 4,
+              decoration: BoxDecoration(color: BT.divider, borderRadius: BorderRadius.circular(2))
+            ),
+            
+            // Header
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+              child: Row(
+                children: [
+                  if (widget.icon != null) ...[
+                    Icon(widget.icon, color: widget.iconColor, size: 22),
+                    const SizedBox(width: 8),
+                  ],
+                  Text(widget.title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: BT.textPrimary)),
+                ],
+              ),
+            ),
+            const Divider(color: BT.divider),
+            
+            // Dynamic List
+            _loading
+              ? const Padding(
+                  padding: EdgeInsets.all(40),
+                  child: CircularProgressIndicator(color: BT.pastelPurple),
+                )
+              : _users.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.all(40),
+                    child: Text('No one to show.', style: TextStyle(color: BT.textSecondary)),
+                  )
+                : Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: _users.length,
+                      itemBuilder: (context, i) {
+                        final u = _users[i];
+                        final name = u['name'] ?? 'Unknown';
+                        final handle = '@$name';
+                        final profileUrl = u['profileUrl'] as String?;
+                        final initial = name.toString().isNotEmpty ? name.toString()[0].toUpperCase() : '?';
+
+                        return ListTile(
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                          leading: Container(
+                            width: 42, height: 42,
+                            decoration: BoxDecoration(
+                              color: BT.pastelPurple.withOpacity(0.8),
+                              shape: BoxShape.circle,
+                            ),
+                            child: ClipOval(
+                              child: profileUrl != null && profileUrl.isNotEmpty
+                                ? Image.network(profileUrl, fit: BoxFit.cover)
+                                : Center(child: Text(initial, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16))),
+                            ),
+                          ),
+                          title: Text(handle, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: BT.textPrimary)),
+                          onTap: () {
+                            Navigator.pop(context); // Close the sheet
+                            widget.onUserTap(handle); // Jump to their profile
+                          },
+                        );
+                      },
+                    ),
+                  ),
+          ],
+        ),
       ),
     );
   }

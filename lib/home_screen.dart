@@ -14,6 +14,7 @@ import '../widgets/circle_sheet.dart';
 import 'login.dart';
 import 'screens/profile_screen.dart';
 import 'screens/thread_screen.dart';
+import 'screens/notifications_screen.dart';
 
 const Color appBgTint = Color(0xFFF6F0FA);
 
@@ -98,10 +99,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String get _greeting {
     final hour = DateTime.now().hour;
-    if (hour < 5)  return 'Still up,';
-    if (hour < 12) return 'Good morning!,';
-    if (hour < 17) return 'Good afternoon!,';
-    if (hour < 23) return 'Good evening!,';
+    if (hour < 5)  return 'Still up? ,';
+    if (hour < 12) return 'Good morning! ,';
+    if (hour < 17) return 'Good afternoon! ,';
+    if (hour < 23) return 'Good evening! ,';
     return 'Good evening!,';
   }
 
@@ -330,12 +331,76 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ],
                                 ),
                               ),
-                              const SizedBox(
-                                width: 48,
-                                child: Align(
-                                  alignment: Alignment.topRight,
-                                  child: AnimatedBell(hasNotification: true),
-                                ),
+                              // ── DYNAMIC NOTIFICATION BELL ──
+                              StreamBuilder<QuerySnapshot>(
+                                stream: user != null 
+                                  ? FirebaseFirestore.instance
+                                      .collection('users')
+                                      .doc(user.uid)
+                                      .collection('notifications')
+                                      .where('isRead', isEqualTo: false)
+                                      .snapshots()
+                                  : const Stream.empty(),
+                                builder: (context, notificationSnapshot) {
+                                  final unreadCount = notificationSnapshot.data?.docs.length ?? 0;
+                                  final hasUnread = unreadCount > 0;
+
+                                  return Listener(
+                                    onPointerUp: (_) {
+                                      HapticFeedback.lightImpact();
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(builder: (_) => const NotificationsScreen()),
+                                      );
+                                    },
+                                    child: Container(
+                                      // Made it 56x56 so it's still a huge target but doesn't squish your title
+                                      width: 56,
+                                      height: 56,
+                                      color: Colors.transparent, 
+                                      // ── FIXED: Snap the bell to the top right of the invisible box! ──
+                                      alignment: Alignment.topRight, 
+                                      child: Stack(
+                                        clipBehavior: Clip.none,
+                                        children: [
+                                          Container(
+                                            width: 42,
+                                            height: 42,
+                                            decoration: BoxDecoration(
+                                              color: Colors.white.withOpacity(0.8),
+                                              shape: BoxShape.circle,
+                                              border: Border.all(color: Colors.white, width: 1.5),
+                                            ),
+                                            child: AnimatedBell(hasNotification: hasUnread),
+                                          ),
+                                          // ── NOTIFICATION COUNTER BADGE ──
+                                          if (hasUnread)
+                                            Positioned(
+                                              top: -2, // Adjusted slightly for the new alignment
+                                              right: -2,
+                                              child: Container(
+                                                padding: const EdgeInsets.all(5),
+                                                decoration: BoxDecoration(
+                                                  color: BT.heartRed, 
+                                                  shape: BoxShape.circle,
+                                                  border: Border.all(color: Colors.white, width: 2),
+                                                ),
+                                                child: Text(
+                                                  unreadCount > 9 ? '9+' : unreadCount.toString(),
+                                                  style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontSize: 10,
+                                                    fontWeight: FontWeight.w900,
+                                                    height: 1,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                }
                               ),
                             ],
                           ),

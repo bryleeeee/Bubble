@@ -97,7 +97,7 @@ class Post {
   final String timestamp;
   final String text;
   final MoodTag mood;
-  int likes;
+  final List<String> likedBy;
   int commentCount;
   int repostCount;
   final List<String> imageUrls;
@@ -123,7 +123,7 @@ class Post {
   Post({
     required this.id, required this.author, required this.avatarSeed,
     this.avatarColorIndex = 0, required this.timestamp, required this.text,
-    required this.mood, required this.likes, required this.commentCount,
+    required this.mood, this.likedBy = const [], required this.commentCount,
     this.repostCount = 0, this.imageUrls = const [], this.music,
     this.seenBy = const [], this.circle, 
     this.reactions = const {}, 
@@ -170,14 +170,17 @@ class Post {
       avatarSeed: data['avatarSeed'] ?? 'X', avatarColorIndex: data['avatarColorIndex'] ?? 0,
       timestamp: formattedTime, text: data['text'] ?? '',
       mood: MoodTagX.fromString(data['mood'] ?? 'none'),
-      likes: data['likes'] ?? 0, commentCount: data['commentCount'] ?? 0,
+      
+      likedBy: List<String>.from(data['likedBy'] ?? []), 
+      commentCount: data['commentCount'] ?? 0, // <-- Added this back in!
+      
       repostCount: data['repostCount'] ?? 0, imageUrls: parsedUrls,
       music: data['music'] != null ? MusicTrack.fromMap(data['music']) : null,
       seenBy: List<String>.from(data['seenBy'] ?? []), 
       circle: data['circle'], 
       reactions: parsedReactions, 
-      isGhost: data['isGhost'] ?? false, // ── NEW ──
-      expiresAt: expirationDate,         // ── NEW ──
+      isGhost: data['isGhost'] ?? false,
+      expiresAt: expirationDate,
       isRepost: data['isRepost'] ?? false, repostedBy: data['repostedBy'],
       originalPostId: data['originalPostId'], originalAuthor: data['originalAuthor'],
       originalAvatarSeed: data['originalAvatarSeed'],

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../screens/notifications_screen.dart'; // Adjust this path if needed!
 
 // ============================================================================
 // CIRCLE SHEET (100% Standalone - No BT Imports Needed)
@@ -142,15 +143,42 @@ class _CircleSheetState extends State<CircleSheet>
                           return;
                         }
                         
-                        await q.docs.first.reference.update({
+                        final circleDoc = q.docs.first;
+                        final circleData = circleDoc.data();
+                        
+                        // 1. Add the user to the circle
+                        await circleDoc.reference.update({
                           'members': FieldValue.arrayUnion([user.uid])
                         });
+
+                        // ── 2. SEND NOTIFICATION TO THE OWNER! ──
+                        final ownerId = circleData['ownerId'] as String?;
+                        final circleName = circleData['name'] ?? 'your circle';
+                        
+                        // Don't notify the owner if they somehow use their own code
+                        if (ownerId != null && ownerId != user.uid) {
+                          final myName = user.displayName != null && user.displayName!.isNotEmpty 
+                              ? '@${user.displayName}' 
+                              : '@Someone';
+                              
+                          try {
+                            await NotificationService.sendRealNotification(
+                              targetUserId: ownerId,
+                              type: 'circle_join',
+                              actorName: myName,
+                              message: ' joined your circle "$circleName".',
+                              referenceId: null, // Since it's a circle, not a post, we don't need to link to a thread
+                            );
+                          } catch (e) {
+                            debugPrint('Failed to send join notification: $e');
+                          }
+                        }
                         
                         HapticFeedback.lightImpact();
                         if (!mounted) return;
                         Navigator.pop(context);
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Joined ${q.docs.first['name']}! 🫧'))
+                          SnackBar(content: Text('Joined $circleName! 🫧'))
                         );
                       },
                     ),
